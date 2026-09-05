@@ -2,7 +2,10 @@ package files
 
 import (
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -246,4 +249,105 @@ func (h *Handler) DeleteFile(c *gin.Context) {
 	}
 
 	httpx.NoContent(c, httpx.StatusNoContent)
+}
+
+// IssueFileAccessToken handles POST /v1/files/:file_id/access-token.
+func (h *Handler) IssueFileAccessToken(c *gin.Context) {
+	ownerID, ok := auth.UserIDFromContext(c)
+	if !ok {
+		httpx.WriteError(c, httpx.StatusUnauthorized, "AUTH_INVALID_TOKEN", "access token is invalid or revoked")
+		return
+	}
+
+	fileID, err := uuid.Parse(c.Param("file_id"))
+	if err != nil {
+		httpx.WriteError(c, httpx.StatusBadRequest, "VALIDATION_FAILED", "file_id is invalid")
+		return
+	}
+
+	result, err := h.service.IssueFileAccessToken(c.Request.Context(), ownerID, fileID)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrFileNotFound):
+			httpx.WriteError(c, httpx.StatusNotFound, "FILE_NOT_FOUND", "file not found")
+		case errors.Is(err, ErrFileForbidden):
+			httpx.WriteError(c, httpx.StatusForbidden, "FILE_FORBIDDEN", "you do not own this file")
+		default:
+			httpx.WriteError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to issue file access token")
+		}
+		return
+	}
+
+	httpx.WriteJSON(c, http.StatusOK, result)
+}
+
+// RequireFileAccessAuth validates file-access JWT for content downloads.
+func (h *Handler) RequireFileAccessAuth() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		token := bearerToken(c.GetHeader("Authorization"))
+		if token == "" {
+			httpx.WriteError(c, httpx.StatusUnauthorized, "AUTH_INVALID_TOKEN", "file access token is invalid or revoked")
+			return
+		}
+
+		fileID, err := uuid.Parse(c.Param("file_id"))
+		if err != nil {
+			httpx.WriteError(c, httpx.StatusBadRequest, "VALIDATION_FAILED", "file_id is invalid")
+			return
+		}
+
+		if err := h.service.ValidateFileAccessToken(c.Request.Context(), token, fileID); err != nil {
+			httpx.WriteError(c, httpx.StatusUnauthorized, "AUTH_INVALID_TOKEN", "file access token is invalid or revoked")
+			return
+		}
+
+		c.Next()
+	}
+}
+
+// GetContent handles GET /v1/files/:file_id/content.
+func (h *Handler) GetContent(c *gin.Context) {
+	fileID, err := uuid.Parse(c.Param("file_id"))
+	if err != nil {
+		httpx.WriteError(c, httpx.StatusBadRequest, "VALIDATION_FAILED", "file_id is invalid")
+		return
+	}
+
+	result, err := h.service.GetFileContent(c.Request.Context(), fileID, c.GetHeader("Range"))
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrFileNotFound):
+			httpx.WriteError(c, httpx.StatusNotFound, "FILE_NOT_FOUND", "file not found")
+		case errors.Is(err, ErrRangeNotSatisfiable):
+			httpx.WriteError(c, http.StatusRequestedRangeNotSatisfiable, "RANGE_NOT_SATISFIABLE", "requested range is not satisfiable")
+		default:
+			httpx.WriteError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to read file content")
+		}
+		return
+	}
+	defer result.Reader.Close()
+
+	c.Header("Accept-Ranges", "bytes")
+	c.Header("Content-Type", result.ContentType)
+
+	if result.Range != nil {
+		c.Header("Content-Range", fmt.Sprintf("bytes %d-%d/%d", result.Range.Start, result.Range.End, result.SizeBytes))
+		c.Header("Content-Length", fmt.Sprintf("%d", result.Range.End-result.Range.Start+1))
+		c.Status(http.StatusPartialContent)
+	} else {
+		c.Header("Content-Length", fmt.Sprintf("%d", result.SizeBytes))
+		c.Status(http.StatusOK)
+	}
+
+	if _, err := io.Copy(c.Writer, result.Reader); err != nil {
+		return
+	}
+}
+
+func bearerToken(header string) string {
+	parts := strings.SplitN(header, " ", 2)
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
+		return ""
+	}
+	return strings.TrimSpace(parts[1])
 }

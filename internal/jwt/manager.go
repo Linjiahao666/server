@@ -17,12 +17,20 @@ import (
 )
 
 const (
-	AccessTokenTTL  = 15 * time.Minute
-	RefreshTokenTTL = 7 * 24 * time.Hour
+	AccessTokenTTL     = 15 * time.Minute
+	RefreshTokenTTL    = 7 * 24 * time.Hour
+	FileAccessTokenTTL = 5 * time.Minute
+	FileAccessAudience = "file-access"
 )
 
 // AccessClaims are JWT claims for user access tokens.
 type AccessClaims struct {
+	jwt.RegisteredClaims
+}
+
+// FileAccessClaims are JWT claims for short-lived file download tokens.
+type FileAccessClaims struct {
+	FileID string `json:"file_id"`
 	jwt.RegisteredClaims
 }
 
@@ -89,6 +97,58 @@ func (m *Manager) IssueAccessToken(userID uuid.UUID) (string, string, time.Time,
 	return signed, jti, expiresAt, nil
 }
 
+// IssueFileAccessToken signs a short-lived token bound to a file.
+func (m *Manager) IssueFileAccessToken(userID, fileID uuid.UUID) (string, string, time.Time, error) {
+	jti := uuid.NewString()
+	now := time.Now().UTC()
+	expiresAt := now.Add(FileAccessTokenTTL)
+
+	claims := FileAccessClaims{
+		FileID: fileID.String(),
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   userID.String(),
+			ID:        jti,
+			Audience:  jwt.ClaimStrings{FileAccessAudience},
+			IssuedAt:  jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(expiresAt),
+		},
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	token.Header["kid"] = m.keyID
+
+	signed, err := token.SignedString(m.privateKey)
+	if err != nil {
+		return "", "", time.Time{}, err
+	}
+
+	return signed, jti, expiresAt, nil
+}
+
+// ParseFileAccessToken validates and parses a file-access token.
+func (m *Manager) ParseFileAccessToken(tokenString string) (*FileAccessClaims, error) {
+	token, err := jwt.ParseWithClaims(tokenString, &FileAccessClaims{}, func(token *jwt.Token) (interface{}, error) {
+		if token.Method.Alg() != jwt.SigningMethodRS256.Alg() {
+			return nil, fmt.Errorf("unexpected signing method: %s", token.Method.Alg())
+		}
+		return m.publicKey, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	claims, ok := token.Claims.(*FileAccessClaims)
+	if !ok || !token.Valid {
+		return nil, errors.New("invalid token claims")
+	}
+
+	if !hasAudience(claims.Audience, FileAccessAudience) {
+		return nil, errors.New("invalid token audience")
+	}
+
+	return claims, nil
+}
+
 // ParseAccessToken validates and parses an access token.
 func (m *Manager) ParseAccessToken(tokenString string) (*AccessClaims, error) {
 	token, err := jwt.ParseWithClaims(tokenString, &AccessClaims{}, func(token *jwt.Token) (interface{}, error) {
@@ -127,6 +187,15 @@ func (m *Manager) JWKS() map[string]interface{} {
 // MarshalJWKS serializes JWKS as JSON bytes.
 func (m *Manager) MarshalJWKS() ([]byte, error) {
 	return json.Marshal(m.JWKS())
+}
+
+func hasAudience(audiences jwt.ClaimStrings, expected string) bool {
+	for _, audience := range audiences {
+		if audience == expected {
+			return true
+		}
+	}
+	return false
 }
 
 func parsePrivateKey(pemData string) (*rsa.PrivateKey, error) {

@@ -63,7 +63,7 @@ func NewDependencies(cfg config.Config) (*Dependencies, error) {
 	blacklistStore := blacklist.NewStore(redisClient)
 	authService := auth.NewService(userRepo, sessionRepo, jwtManager, blacklistStore)
 	authHandler := auth.NewHandler(authService)
-	fileService := files.NewService(fileRepo, uploadRepo, objectStore)
+	fileService := files.NewService(fileRepo, uploadRepo, objectStore, jwtManager, blacklistStore)
 	fileHandler := files.NewHandler(fileService)
 
 	return &Dependencies{
@@ -106,14 +106,19 @@ func NewRouter(authHandler *auth.Handler, fileHandler *files.Handler) *gin.Engin
 		authGroup.GET("/me", authHandler.RequireAuth(), authHandler.Me)
 	}
 
-	fileGroup := router.Group("/v1/files", authHandler.RequireAuth())
+	fileGroup := router.Group("/v1/files")
 	{
-		fileGroup.POST("", fileHandler.UploadSmall)
-		fileGroup.POST("/uploads", fileHandler.InitiateUpload)
-		fileGroup.POST("/uploads/:upload_id/complete", fileHandler.CompleteUpload)
-		fileGroup.DELETE("/uploads/:upload_id", fileHandler.AbortUpload)
-		fileGroup.GET("/:file_id", fileHandler.GetFile)
-		fileGroup.DELETE("/:file_id", fileHandler.DeleteFile)
+		authed := fileGroup.Group("", authHandler.RequireAuth())
+		{
+			authed.POST("", fileHandler.UploadSmall)
+			authed.POST("/uploads", fileHandler.InitiateUpload)
+			authed.POST("/uploads/:upload_id/complete", fileHandler.CompleteUpload)
+			authed.DELETE("/uploads/:upload_id", fileHandler.AbortUpload)
+			authed.GET("/:file_id", fileHandler.GetFile)
+			authed.POST("/:file_id/access-token", fileHandler.IssueFileAccessToken)
+			authed.DELETE("/:file_id", fileHandler.DeleteFile)
+		}
+		fileGroup.GET("/:file_id/content", fileHandler.RequireFileAccessAuth(), fileHandler.GetContent)
 	}
 
 	return router

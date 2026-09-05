@@ -9,6 +9,8 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/Linjiahao666/server/internal/blacklist"
+	jwtmanager "github.com/Linjiahao666/server/internal/jwt"
 	"github.com/Linjiahao666/server/internal/repository"
 	"github.com/Linjiahao666/server/internal/storage"
 )
@@ -45,11 +47,28 @@ type CompletePartInput struct {
 	ETag       string
 }
 
+// FileAccessTokenResult contains a short-lived download credential.
+type FileAccessTokenResult struct {
+	AccessToken string `json:"access_token"`
+	TokenType   string `json:"token_type"`
+	ExpiresIn   int    `json:"expires_in"`
+}
+
+// FileContentResult contains streamed file bytes and response metadata.
+type FileContentResult struct {
+	Reader      io.ReadCloser
+	ContentType string
+	SizeBytes   int64
+	Range       *ByteRange
+}
+
 // Service handles file workflows.
 type Service struct {
-	files   *repository.FileRepository
-	uploads *repository.UploadRepository
-	store   storage.ObjectStore
+	files     *repository.FileRepository
+	uploads   *repository.UploadRepository
+	store     storage.ObjectStore
+	jwt       *jwtmanager.Manager
+	blacklist *blacklist.Store
 }
 
 // NewService creates a file service.
@@ -57,11 +76,15 @@ func NewService(
 	files *repository.FileRepository,
 	uploads *repository.UploadRepository,
 	store storage.ObjectStore,
+	jwt *jwtmanager.Manager,
+	blacklist *blacklist.Store,
 ) *Service {
 	return &Service{
-		files:   files,
-		uploads: uploads,
-		store:   store,
+		files:     files,
+		uploads:   uploads,
+		store:     store,
+		jwt:       jwt,
+		blacklist: blacklist,
 	}
 }
 
@@ -260,6 +283,91 @@ func (s *Service) GetFile(ctx context.Context, ownerID, fileID uuid.UUID) (FileV
 		return FileView{}, ErrFileForbidden
 	}
 	return toFileView(file), nil
+}
+
+// IssueFileAccessToken creates a short-lived download token for an owned file.
+func (s *Service) IssueFileAccessToken(ctx context.Context, ownerID, fileID uuid.UUID) (FileAccessTokenResult, error) {
+	file, err := s.files.FindByID(ctx, fileID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return FileAccessTokenResult{}, ErrFileNotFound
+		}
+		return FileAccessTokenResult{}, err
+	}
+	if file.OwnerID != ownerID {
+		return FileAccessTokenResult{}, ErrFileForbidden
+	}
+
+	token, _, _, err := s.jwt.IssueFileAccessToken(ownerID, fileID)
+	if err != nil {
+		return FileAccessTokenResult{}, err
+	}
+
+	return FileAccessTokenResult{
+		AccessToken: token,
+		TokenType:   "Bearer",
+		ExpiresIn:   int(jwtmanager.FileAccessTokenTTL.Seconds()),
+	}, nil
+}
+
+// ValidateFileAccessToken checks a file-access JWT against the requested file.
+func (s *Service) ValidateFileAccessToken(ctx context.Context, tokenString string, fileID uuid.UUID) error {
+	claims, err := s.jwt.ParseFileAccessToken(tokenString)
+	if err != nil {
+		return ErrInvalidFileAccessToken
+	}
+
+	revoked, err := s.blacklist.IsRevoked(ctx, claims.ID)
+	if err != nil {
+		return err
+	}
+	if revoked {
+		return ErrInvalidFileAccessToken
+	}
+
+	claimFileID, err := uuid.Parse(claims.FileID)
+	if err != nil || claimFileID != fileID {
+		return ErrInvalidFileAccessToken
+	}
+
+	return nil
+}
+
+// GetFileContent streams file bytes, optionally honoring a Range header.
+func (s *Service) GetFileContent(ctx context.Context, fileID uuid.UUID, rangeHeader string) (FileContentResult, error) {
+	file, err := s.files.FindByID(ctx, fileID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return FileContentResult{}, ErrFileNotFound
+		}
+		return FileContentResult{}, err
+	}
+
+	byteRange, hasRange, err := ParseRangeHeader(rangeHeader, file.SizeBytes)
+	if err != nil {
+		return FileContentResult{}, err
+	}
+
+	var offset int64
+	var length int64 = -1
+	var selectedRange *ByteRange
+	if hasRange {
+		offset = byteRange.Start
+		length = byteRange.End - byteRange.Start + 1
+		selectedRange = &byteRange
+	}
+
+	reader, err := s.store.GetObject(ctx, file.ObjectKey, offset, length)
+	if err != nil {
+		return FileContentResult{}, err
+	}
+
+	return FileContentResult{
+		Reader:      reader,
+		ContentType: file.ContentType,
+		SizeBytes:   file.SizeBytes,
+		Range:       selectedRange,
+	}, nil
 }
 
 // DeleteFile removes a file from storage and the database.

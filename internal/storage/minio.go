@@ -27,10 +27,18 @@ type PresignedPart struct {
 	UploadURL  string `json:"upload_url"`
 }
 
+// ObjectInfo describes stored object metadata.
+type ObjectInfo struct {
+	SizeBytes   int64
+	ContentType string
+}
+
 // ObjectStore abstracts MinIO object operations.
 type ObjectStore interface {
 	PutObject(ctx context.Context, objectKey, contentType string, reader io.Reader, size int64) error
 	RemoveObject(ctx context.Context, objectKey string) error
+	StatObject(ctx context.Context, objectKey string) (ObjectInfo, error)
+	GetObject(ctx context.Context, objectKey string, offset, length int64) (io.ReadCloser, error)
 	CreateMultipartUpload(ctx context.Context, objectKey, contentType string) (string, error)
 	PresignUploadParts(ctx context.Context, objectKey, uploadID string, partCount int, expiry time.Duration) ([]PresignedPart, error)
 	CompleteMultipartUpload(ctx context.Context, objectKey, uploadID string, parts []CompletedPart) error
@@ -83,6 +91,34 @@ func (s *MinioStore) PutObject(ctx context.Context, objectKey, contentType strin
 // RemoveObject deletes an object.
 func (s *MinioStore) RemoveObject(ctx context.Context, objectKey string) error {
 	return s.client.RemoveObject(ctx, s.bucket, objectKey, minio.RemoveObjectOptions{})
+}
+
+// StatObject returns object metadata.
+func (s *MinioStore) StatObject(ctx context.Context, objectKey string) (ObjectInfo, error) {
+	info, err := s.client.StatObject(ctx, s.bucket, objectKey, minio.StatObjectOptions{})
+	if err != nil {
+		return ObjectInfo{}, err
+	}
+	contentType := info.ContentType
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	return ObjectInfo{
+		SizeBytes:   info.Size,
+		ContentType: contentType,
+	}, nil
+}
+
+// GetObject reads object bytes. When length is negative, the full object is returned.
+func (s *MinioStore) GetObject(ctx context.Context, objectKey string, offset, length int64) (io.ReadCloser, error) {
+	opts := minio.GetObjectOptions{}
+	if length >= 0 {
+		end := offset + length - 1
+		if err := opts.SetRange(offset, end); err != nil {
+			return nil, err
+		}
+	}
+	return s.client.GetObject(ctx, s.bucket, objectKey, opts)
 }
 
 // CreateMultipartUpload starts a multipart upload session.

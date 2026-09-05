@@ -35,6 +35,9 @@ var ErrUploadNotPending = errors.New("upload not pending")
 // ErrValidationFailed indicates request validation failed.
 var ErrValidationFailed = errors.New("validation failed")
 
+// ErrInvalidFileAccessToken indicates the file-access token is invalid or revoked.
+var ErrInvalidFileAccessToken = errors.New("invalid file access token")
+
 func objectKey(fileID uuid.UUID) string {
 	return fmt.Sprintf("files/%s", fileID.String())
 }
