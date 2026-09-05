@@ -1,0 +1,560 @@
+# PROTOTYPE — throwaway API contract for wayfinder #7. Not production code.
+openapi: 3.1.0
+info:
+  title: Store Auth & File Service
+  version: 0.1.0-prototype
+  description: |
+    单服务部署：鉴权与文件 API 同进程。
+    存储：PostgreSQL + Redis + MinIO。
+    凭证：JWT Access + Refresh；文件下载用 file-access JWT + Range 代理。
+
+servers:
+  - url: https://api.example.com
+    description: 公网 HTTPS
+
+tags:
+  - name: auth
+  - name: files
+
+paths:
+  /v1/auth/register:
+    post:
+      tags: [auth]
+      summary: 用户注册
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: 注册成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /v1/auth/login:
+    post:
+      tags: [auth]
+      summary: 用户登录
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: 登录成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /v1/auth/refresh:
+    post:
+      tags: [auth]
+      summary: 刷新 Access Token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refresh_token]
+              properties:
+                refresh_token:
+                  type: string
+      responses:
+        '200':
+          description: 刷新成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /v1/auth/logout:
+    post:
+      tags: [auth]
+      summary: 登出（吊销 Access jti + Refresh）
+      security:
+        - bearerAuth: []
+      responses:
+        '204':
+          description: 已登出
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /v1/auth/.well-known/jwks.json:
+    get:
+      tags: [auth]
+      summary: JWKS 公钥（供应用后端本地验签）
+      responses:
+        '200':
+          description: JWKS
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /v1/files:
+    post:
+      tags: [files]
+      summary: 小文件直传（图片等，低于分片阈值）
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                content_type:
+                  type: string
+                  example: image/jpeg
+      responses:
+        '201':
+          description: 上传成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+
+  /v1/files/uploads:
+    post:
+      tags: [files]
+      summary: 发起分片上传（S3 Multipart + presigned）
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InitiateUploadRequest'
+      responses:
+        '201':
+          description: 已创建 multipart upload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InitiateUploadResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /v1/files/uploads/{upload_id}/complete:
+    post:
+      tags: [files]
+      summary: 完成分片上传
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/UploadId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompleteUploadRequest'
+      responses:
+        '200':
+          description: 合并成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /v1/files/uploads/{upload_id}:
+    delete:
+      tags: [files]
+      summary: 放弃分片上传
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/UploadId'
+      responses:
+        '204':
+          description: 已中止
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /v1/files/{file_id}:
+    get:
+      tags: [files]
+      summary: 获取文件元数据
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/FileId'
+      responses:
+        '200':
+          description: 元数据
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [files]
+      summary: 删除文件
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/FileId'
+      responses:
+        '204':
+          description: 已删除
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /v1/files/{file_id}/access-token:
+    post:
+      tags: [files]
+      summary: 签发 file-access JWT（用于 Range 代理下载）
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/FileId'
+      responses:
+        '200':
+          description: 短期下载凭证
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileAccessTokenResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /v1/files/{file_id}/content:
+    get:
+      tags: [files]
+      summary: 文件内容（Range 代理）
+      description: |
+        使用 file-access JWT，非用户 Access JWT。
+        支持 `Range` 请求头；响应 `206 Partial Content` 或 `200`。
+      security:
+        - fileAccessAuth: []
+      parameters:
+        - $ref: '#/components/parameters/FileId'
+        - name: Range
+          in: header
+          schema:
+            type: string
+            example: bytes=0-1048575
+      responses:
+        '200':
+          description: 完整内容
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '206':
+          description: 部分内容
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '416':
+          $ref: '#/components/responses/RangeNotSatisfiable'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: 用户 Access JWT
+    fileAccessAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: file-access JWT（`aud=file-access`，绑定 file_id）
+
+  parameters:
+    FileId:
+      name: file_id
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/Uuid'
+    UploadId:
+      name: upload_id
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/Uuid'
+
+  schemas:
+    Uuid:
+      type: string
+      format: uuid
+      example: 550e8400-e29b-41d4-a716-446655440000
+
+    RegisterRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          minLength: 3
+          maxLength: 64
+        password:
+          type: string
+          minLength: 8
+          maxLength: 128
+
+    LoginRequest:
+      $ref: '#/components/schemas/RegisterRequest'
+
+    UserResponse:
+      type: object
+      required: [id, username, created_at]
+      properties:
+        id:
+          $ref: '#/components/schemas/Uuid'
+        username:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    TokenResponse:
+      type: object
+      required: [access_token, refresh_token, token_type, expires_in]
+      properties:
+        access_token:
+          type: string
+        refresh_token:
+          type: string
+        token_type:
+          type: string
+          enum: [Bearer]
+        expires_in:
+          type: integer
+          description: Access Token 秒数
+          example: 900
+
+    FileResponse:
+      type: object
+      required: [id, owner_id, content_type, size_bytes, created_at]
+      properties:
+        id:
+          $ref: '#/components/schemas/Uuid'
+        owner_id:
+          $ref: '#/components/schemas/Uuid'
+        content_type:
+          type: string
+        size_bytes:
+          type: integer
+          format: int64
+        filename:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    InitiateUploadRequest:
+      type: object
+      required: [filename, content_type, size_bytes]
+      properties:
+        filename:
+          type: string
+        content_type:
+          type: string
+        size_bytes:
+          type: integer
+          format: int64
+        part_size_bytes:
+          type: integer
+          format: int64
+          description: 可选，默认 8MB
+          example: 8388608
+
+    InitiateUploadResponse:
+      type: object
+      required: [upload_id, file_id, part_size_bytes, parts]
+      properties:
+        upload_id:
+          $ref: '#/components/schemas/Uuid'
+        file_id:
+          $ref: '#/components/schemas/Uuid'
+        part_size_bytes:
+          type: integer
+        parts:
+          type: array
+          items:
+            type: object
+            required: [part_number, upload_url]
+            properties:
+              part_number:
+                type: integer
+                minimum: 1
+              upload_url:
+                type: string
+                format: uri
+                description: presigned URL，客户端 PUT 直传 MinIO
+
+    CompleteUploadRequest:
+      type: object
+      required: [parts]
+      properties:
+        parts:
+          type: array
+          items:
+            type: object
+            required: [part_number, etag]
+            properties:
+              part_number:
+                type: integer
+              etag:
+                type: string
+
+    FileAccessTokenResponse:
+      type: object
+      required: [access_token, token_type, expires_in]
+      properties:
+        access_token:
+          type: string
+          description: file-access JWT
+        token_type:
+          type: string
+          enum: [Bearer]
+        expires_in:
+          type: integer
+          example: 300
+
+    ErrorBody:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              example: AUTH_INVALID_TOKEN
+            message:
+              type: string
+
+  responses:
+    Unauthorized:
+      description: 未认证或凭证无效
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+          example:
+            error:
+              code: AUTH_INVALID_TOKEN
+              message: access token is invalid or revoked
+    Forbidden:
+      description: 已认证但无权访问
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+          example:
+            error:
+              code: FILE_FORBIDDEN
+              message: you do not own this file
+    NotFound:
+      description: 资源不存在
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+          example:
+            error:
+              code: FILE_NOT_FOUND
+              message: file not found
+    Conflict:
+      description: 资源冲突
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+          example:
+            error:
+              code: AUTH_USERNAME_TAKEN
+              message: username already exists
+    ValidationError:
+      description: 请求体验证失败
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+          example:
+            error:
+              code: VALIDATION_FAILED
+              message: password must be at least 8 characters
+    BadRequest:
+      description: 业务请求无效
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+    PayloadTooLarge:
+      description: 超过小文件直传上限
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+          example:
+            error:
+              code: FILE_TOO_LARGE
+              message: use multipart upload for files over 10MB
+    RangeNotSatisfiable:
+      description: Range 不合法
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+          example:
+            error:
+              code: RANGE_NOT_SATISFIABLE
+              message: requested range is not satisfiable

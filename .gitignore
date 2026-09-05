@@ -1,5 +1,8 @@
 node_modules/
 dist/
+server
+server.exe
+*.test.exe
 .env
 .env.*
 !.env.example
