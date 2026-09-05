@@ -1,7 +1,7 @@
 node_modules/
 dist/
-server
-server.exe
+/server
+/server.exe
 *.test.exe
 .env
 .env.*
