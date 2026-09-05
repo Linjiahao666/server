@@ -11,18 +11,21 @@ import (
 	"github.com/Linjiahao666/server/internal/auth"
 	"github.com/Linjiahao666/server/internal/blacklist"
 	"github.com/Linjiahao666/server/internal/config"
+	"github.com/Linjiahao666/server/internal/files"
 	jwtmanager "github.com/Linjiahao666/server/internal/jwt"
 	"github.com/Linjiahao666/server/internal/migrate"
 	"github.com/Linjiahao666/server/internal/repository"
+	"github.com/Linjiahao666/server/internal/storage"
 )
 
 // Dependencies holds shared application dependencies.
 type Dependencies struct {
-	Config   config.Config
-	Pool     *pgxpool.Pool
-	Redis    *redis.Client
-	Auth     *auth.Service
-	Handler  *auth.Handler
+	Config      config.Config
+	Pool        *pgxpool.Pool
+	Redis       *redis.Client
+	Auth        *auth.Service
+	AuthHandler *auth.Handler
+	FileHandler *files.Handler
 }
 
 // NewDependencies wires core services.
@@ -46,18 +49,30 @@ func NewDependencies(cfg config.Config) (*Dependencies, error) {
 		return nil, fmt.Errorf("init jwt: %w", err)
 	}
 
+	objectStore, err := storage.NewMinioStore(cfg)
+	if err != nil {
+		pool.Close()
+		_ = redisClient.Close()
+		return nil, fmt.Errorf("init minio: %w", err)
+	}
+
 	userRepo := repository.NewUserRepository(pool)
 	sessionRepo := repository.NewSessionRepository(pool)
+	fileRepo := repository.NewFileRepository(pool)
+	uploadRepo := repository.NewUploadRepository(pool)
 	blacklistStore := blacklist.NewStore(redisClient)
 	authService := auth.NewService(userRepo, sessionRepo, jwtManager, blacklistStore)
 	authHandler := auth.NewHandler(authService)
+	fileService := files.NewService(fileRepo, uploadRepo, objectStore)
+	fileHandler := files.NewHandler(fileService)
 
 	return &Dependencies{
-		Config:  cfg,
-		Pool:    pool,
-		Redis:   redisClient,
-		Auth:    authService,
-		Handler: authHandler,
+		Config:      cfg,
+		Pool:        pool,
+		Redis:       redisClient,
+		Auth:        authService,
+		AuthHandler: authHandler,
+		FileHandler: fileHandler,
 	}, nil
 }
 
@@ -77,18 +92,28 @@ func RunMigrations(cfg config.Config) error {
 }
 
 // NewRouter builds the HTTP router.
-func NewRouter(handler *auth.Handler) *gin.Engine {
+func NewRouter(authHandler *auth.Handler, fileHandler *files.Handler) *gin.Engine {
 	router := gin.New()
 	router.Use(gin.Recovery())
 
 	authGroup := router.Group("/v1/auth")
 	{
-		authGroup.POST("/register", handler.Register)
-		authGroup.POST("/login", handler.Login)
-		authGroup.POST("/refresh", handler.Refresh)
-		authGroup.GET("/.well-known/jwks.json", handler.JWKS)
-		authGroup.POST("/logout", handler.RequireAuth(), handler.Logout)
-		authGroup.GET("/me", handler.RequireAuth(), handler.Me)
+		authGroup.POST("/register", authHandler.Register)
+		authGroup.POST("/login", authHandler.Login)
+		authGroup.POST("/refresh", authHandler.Refresh)
+		authGroup.GET("/.well-known/jwks.json", authHandler.JWKS)
+		authGroup.POST("/logout", authHandler.RequireAuth(), authHandler.Logout)
+		authGroup.GET("/me", authHandler.RequireAuth(), authHandler.Me)
+	}
+
+	fileGroup := router.Group("/v1/files", authHandler.RequireAuth())
+	{
+		fileGroup.POST("", fileHandler.UploadSmall)
+		fileGroup.POST("/uploads", fileHandler.InitiateUpload)
+		fileGroup.POST("/uploads/:upload_id/complete", fileHandler.CompleteUpload)
+		fileGroup.DELETE("/uploads/:upload_id", fileHandler.AbortUpload)
+		fileGroup.GET("/:file_id", fileHandler.GetFile)
+		fileGroup.DELETE("/:file_id", fileHandler.DeleteFile)
 	}
 
 	return router

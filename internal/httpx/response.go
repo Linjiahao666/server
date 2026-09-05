@@ -51,3 +51,15 @@ const StatusCreated = http.StatusCreated
 
 // StatusNoContent is HTTP 204.
 const StatusNoContent = http.StatusNoContent
+
+// StatusBadRequest is HTTP 400.
+const StatusBadRequest = http.StatusBadRequest
+
+// StatusForbidden is HTTP 403.
+const StatusForbidden = http.StatusForbidden
+
+// StatusNotFound is HTTP 404.
+const StatusNotFound = http.StatusNotFound
+
+// StatusPayloadTooLarge is HTTP 413.
+const StatusPayloadTooLarge = http.StatusRequestEntityTooLarge

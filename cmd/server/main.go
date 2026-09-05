@@ -29,7 +29,7 @@ func main() {
 	}
 	defer deps.Close()
 
-	router := app.NewRouter(deps.Handler)
+	router := app.NewRouter(deps.AuthHandler, deps.FileHandler)
 	server := &http.Server{
 		Addr:    ":" + cfg.HTTPPort,
 		Handler: router,

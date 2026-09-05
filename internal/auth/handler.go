@@ -163,6 +163,11 @@ func accessClaimsFromContext(c *gin.Context) (AccessContext, bool) {
 }
 
 func userIDFromContext(c *gin.Context) (uuid.UUID, bool) {
+	return UserIDFromContext(c)
+}
+
+// UserIDFromContext returns the authenticated user ID from the request context.
+func UserIDFromContext(c *gin.Context) (uuid.UUID, bool) {
 	claims, ok := accessClaimsFromContext(c)
 	if !ok {
 		return uuid.Nil, false
