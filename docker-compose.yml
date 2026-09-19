@@ -6,8 +6,6 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-store}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-store}
       POSTGRES_DB: ${POSTGRES_DB:-store}
-    ports:
-      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -20,8 +18,6 @@ services:
     image: redis:7-alpine
     restart: unless-stopped
     command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:-store}"]
-    ports:
-      - "127.0.0.1:6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-store}", "ping"]
       interval: 5s
@@ -35,9 +31,6 @@ services:
     environment:
       MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
-    ports:
-      - "127.0.0.1:9000:9000"
-      - "127.0.0.1:9001:9001"
     volumes:
       - minio_data:/data
 
