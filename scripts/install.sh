@@ -22,11 +22,11 @@ prompt() {
   local default="${2:-}"
   local reply=""
   if [[ -n "$default" ]]; then
-    printf '%s [%s]: ' "$message" "$default"
+    printf '%s [%s]: ' "$message" "$default" >/dev/tty
   else
-    printf '%s: ' "$message"
+    printf '%s: ' "$message" >/dev/tty
   fi
-  read -r reply || true
+  read -r reply </dev/tty || true
   if [[ -z "$reply" ]]; then
     printf '%s' "$default"
   else
@@ -263,6 +263,7 @@ generate_jwt() {
 create_config() {
   local dir="$1"
   local host_port postgres_password redis_password minio_access minio_secret
+  say "密码全部直接回车即可自动生成，JWT 密钥也会自动写入。"
   host_port="$(prompt "对外访问端口" "8080")"
   postgres_password="$(prompt "PostgreSQL 密码，回车则自动生成" "")"
   redis_password="$(prompt "Redis 密码，回车则自动生成" "")"
