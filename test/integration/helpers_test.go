@@ -91,7 +91,7 @@ func setupTestServer(ctx context.Context, t *testing.T) testEnv {
 
 			minioContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 				ContainerRequest: testcontainers.ContainerRequest{
-					Image:        "minio/minio:latest",
+					Image:        "pgsty/minio:RELEASE.2026-06-18T00-00-00Z",
 					ExposedPorts: []string{"9000/tcp"},
 					Env: map[string]string{
 						"MINIO_ROOT_USER":     "minioadmin",
