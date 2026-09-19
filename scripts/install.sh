@@ -54,16 +54,57 @@ run_root() {
   fi
 }
 
-docker_bin() {
-  if docker info >/dev/null 2>&1; then
-    docker "$@"
-  else
-    run_root docker "$@"
+DOCKER_BIN=""
+COMPOSE=()
+
+pick_bin() {
+  local candidate
+  for candidate in "$@"; do
+    if [[ "$candidate" == /* ]]; then
+      [[ -x "$candidate" ]] || continue
+      printf '%s' "$candidate"
+      return 0
+    fi
+    if command -v "$candidate" >/dev/null 2>&1; then
+      command -v "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+resolve_docker() {
+  DOCKER_BIN="$(pick_bin docker /usr/bin/docker /usr/local/bin/docker)" || return 1
+}
+
+docker_ok() {
+  [[ -n "${DOCKER_BIN}" ]] && "$DOCKER_BIN" info >/dev/null 2>&1
+}
+
+resolve_compose() {
+  if [[ -n "${DOCKER_BIN}" ]] && "$DOCKER_BIN" compose version >/dev/null 2>&1; then
+    COMPOSE=("$DOCKER_BIN" compose)
+    return 0
   fi
+  local bin
+  bin="$(pick_bin docker-compose /usr/bin/docker-compose /usr/local/bin/docker-compose /usr/libexec/docker/cli-plugins/docker-compose /usr/lib/docker/cli-plugins/docker-compose /usr/local/lib/docker/cli-plugins/docker-compose)" || return 1
+  if "$bin" version >/dev/null 2>&1 || "$bin" --version >/dev/null 2>&1; then
+    COMPOSE=("$bin")
+    return 0
+  fi
+  return 1
 }
 
 compose() {
-  docker_bin compose "$@"
+  "${COMPOSE[@]}" "$@"
+}
+
+start_docker_daemon() {
+  if need_bin systemctl; then
+    run_root systemctl enable --now docker >/dev/null 2>&1 || run_root systemctl start docker >/dev/null 2>&1 || true
+  elif need_bin service; then
+    run_root service docker start >/dev/null 2>&1 || true
+  fi
 }
 
 need_bin() {
@@ -97,22 +138,48 @@ ensure_tools() {
 }
 
 ensure_docker() {
-  if docker_bin info >/dev/null 2>&1 && docker_bin compose version >/dev/null 2>&1; then
+  if resolve_docker && docker_ok && resolve_compose; then
     say "Docker 与 Compose 已就绪。"
     return
   fi
-  say "未检测到可用的 Docker，将安装 Docker Engine 与 Compose 插件。"
-  confirm "继续安装 Docker？" "y" || die "需要 Docker 才能部署。"
-  curl -fsSL https://get.docker.com | run_root sh
-  if need_bin systemctl; then
-    run_root systemctl enable --now docker
+
+  if ! resolve_docker; then
+    say "未找到 Docker 可执行文件，将安装 Docker Engine。"
+    confirm "继续安装 Docker？" "y" || die "需要 Docker 才能部署。"
+    curl -fsSL https://get.docker.com | run_root sh
+    resolve_docker || die "Docker 安装完成但仍未找到 docker 命令。"
   fi
-  docker_bin info >/dev/null 2>&1 || die "Docker 安装完成但仍无法使用，请检查服务状态。"
-  docker_bin compose version >/dev/null 2>&1 || die "未找到 docker compose 插件。"
-  if [[ "$(id -u)" -ne 0 ]]; then
-    run_root usermod -aG docker "$USER" || true
-    say "已将当前用户加入 docker 组，若后续命令失败，请重新登录后再执行一次本脚本。"
+
+  if ! docker_ok; then
+    say "Docker 已安装，正在启动守护进程。"
+    start_docker_daemon
+    docker_ok || die "Docker 守护进程无法启动，请在宝塔面板检查 Docker 服务。"
   fi
+
+  if resolve_compose; then
+    say "Docker 与 Compose 已就绪。"
+    return
+  fi
+
+  say "已找到 Docker，缺少 Compose，将只安装 Compose。"
+  confirm "继续安装 Compose？" "y" || die "需要 Compose 才能部署。"
+  local plugin_dir="/usr/local/lib/docker/cli-plugins"
+  local plugin="${plugin_dir}/docker-compose"
+  local arch
+  arch="$(uname -m)"
+  case "$arch" in
+    x86_64) arch=x86_64 ;;
+    aarch64 | arm64) arch=aarch64 ;;
+    *) die "不支持的架构：${arch}" ;;
+  esac
+  run_root mkdir -p "$plugin_dir"
+  run_root curl -fsSL "https://github.com/docker/compose/releases/download/v2.29.7/docker-compose-linux-${arch}" -o "$plugin"
+  run_root chmod +x "$plugin"
+  if [[ ! -e /usr/local/bin/docker-compose ]]; then
+    run_root ln -sf "$plugin" /usr/local/bin/docker-compose
+  fi
+  resolve_compose || die "Compose 安装失败。"
+  say "Docker 与 Compose 已就绪。"
 }
 
 clone_app() {
