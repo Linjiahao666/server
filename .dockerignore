@@ -1,0 +1,6 @@
+.git
+.tmp-*
+secrets/*
+!secrets/.gitkeep
+.server-secrets/
+*.md

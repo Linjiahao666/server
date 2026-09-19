@@ -11,15 +11,16 @@
 
 ## 快速启动
 
-1. 复制环境变量模板：
+Linux 服务器一行安装，脚本会拉取仓库、引导配置并启动 Docker 编排：
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/Linjiahao666/server/master/scripts/install.sh)
+```
+
+本地开发复制环境变量模板后启动：
 
 ```bash
 cp .env.example .env
-```
-
-2. 启动全部服务：
-
-```bash
 docker compose up --build
 ```
 
@@ -29,8 +30,13 @@ docker compose up --build
 
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
-| `HTTP_PORT` | HTTP 监听端口 | `8080` |
+| `HOST_PORT` | 宿主机对外端口 | `8080` |
+| `HTTP_PORT` | 容器内 HTTP 监听端口 | `8080` |
+| `POSTGRES_USER` | PostgreSQL 用户 | `store` |
+| `POSTGRES_PASSWORD` | PostgreSQL 密码 | `store` |
+| `POSTGRES_DB` | PostgreSQL 数据库 | `store` |
 | `DATABASE_URL` | PostgreSQL 连接串 | 必填 |
+| `REDIS_PASSWORD` | Redis 密码 | `store` |
 | `REDIS_URL` | Redis 连接串 | 必填 |
 | `MINIO_ENDPOINT` | MinIO 地址 | `minio:9000` |
 | `MINIO_ACCESS_KEY` | MinIO Access Key | `minioadmin` |
@@ -39,6 +45,8 @@ docker compose up --build
 | `MINIO_USE_SSL` | 是否启用 TLS | `false` |
 | `JWT_PRIVATE_KEY` | RS256 私钥 PEM，留空则开发环境自动生成 | 空 |
 | `JWT_PUBLIC_KEY` | RS256 公钥 PEM | 空 |
+| `JWT_PRIVATE_KEY_FILE` | RS256 私钥文件路径 | 空 |
+| `JWT_PUBLIC_KEY_FILE` | RS256 公钥文件路径 | 空 |
 | `MIGRATIONS_PATH` | 迁移文件目录 | `migrations` |
 
 ## 鉴权 API
@@ -78,7 +86,7 @@ go run ./cmd/server
 ```bash
 docker compose up -d postgres redis
 export TEST_DATABASE_URL=postgres://store:store@localhost:5432/store?sslmode=disable
-export TEST_REDIS_URL=redis://localhost:6379/0
+export TEST_REDIS_URL=redis://:store@localhost:6379/0
 go test ./test/integration/... -v -count=1
 ```
 

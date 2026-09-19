@@ -23,6 +23,15 @@ type Config struct {
 
 // Load reads configuration from environment variables.
 func Load() (Config, error) {
+	privateKey, err := readEnvOrFile("JWT_PRIVATE_KEY", "JWT_PRIVATE_KEY_FILE")
+	if err != nil {
+		return Config{}, err
+	}
+	publicKey, err := readEnvOrFile("JWT_PUBLIC_KEY", "JWT_PUBLIC_KEY_FILE")
+	if err != nil {
+		return Config{}, err
+	}
+
 	cfg := Config{
 		HTTPPort:       getEnv("HTTP_PORT", "8080"),
 		DatabaseURL:    os.Getenv("DATABASE_URL"),
@@ -32,8 +41,8 @@ func Load() (Config, error) {
 		MinioSecretKey: getEnv("MINIO_SECRET_KEY", "minioadmin"),
 		MinioBucket:    getEnv("MINIO_BUCKET", "store"),
 		MinioUseSSL:    getEnvBool("MINIO_USE_SSL", false),
-		JWTPrivateKey:  os.Getenv("JWT_PRIVATE_KEY"),
-		JWTPublicKey:   os.Getenv("JWT_PUBLIC_KEY"),
+		JWTPrivateKey:  privateKey,
+		JWTPublicKey:   publicKey,
 		MigrationsPath: getEnv("MIGRATIONS_PATH", "migrations"),
 	}
 
@@ -45,6 +54,22 @@ func Load() (Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// readEnvOrFile 优先读取环境变量，未设置时再读取对应路径文件。
+func readEnvOrFile(envKey, fileKey string) (string, error) {
+	if value := os.Getenv(envKey); value != "" {
+		return value, nil
+	}
+	path := os.Getenv(fileKey)
+	if path == "" {
+		return "", nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read %s: %w", fileKey, err)
+	}
+	return string(data), nil
 }
 
 func getEnv(key, fallback string) string {
