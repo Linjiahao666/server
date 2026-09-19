@@ -9,7 +9,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o /server ./cmd/server
+RUN GOTOOLCHAIN=local GOSUMDB=sum.golang.google.cn CGO_ENABLED=0 GOOS=linux go build -mod=readonly -o /server ./cmd/server
 
 FROM alpine:3.20
 
