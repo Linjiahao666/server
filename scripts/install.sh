@@ -133,6 +133,11 @@ has_secrets_access() {
   need_bin gh && gh auth status >/dev/null 2>&1 && gh repo view "$SECRETS_REPO" >/dev/null 2>&1
 }
 
+secrets_has_env() {
+  has_secrets_access || return 1
+  gh api "repos/${SECRETS_REPO}/contents/.env" >/dev/null 2>&1
+}
+
 pull_secrets() {
   local dir="$1"
   local tmp="$dir/.server-secrets"
@@ -283,7 +288,7 @@ main() {
       used_secrets=1
     fi
   fi
-  if [[ "$used_secrets" -eq 0 ]] && has_secrets_access; then
+  if [[ "$used_secrets" -eq 0 ]] && secrets_has_env; then
     if confirm "从 GitHub 安全仓库拉取配置？" "y"; then
       pull_secrets "$install_dir"
       used_secrets=1
