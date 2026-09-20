@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -55,10 +56,16 @@ type testEnv struct {
 }
 
 func setupTestServer(ctx context.Context, t *testing.T) testEnv {
-	return setupTestServerWithPublicMinio(ctx, t, "")
+	return setupTestServerConfigured(ctx, t, nil)
 }
 
 func setupTestServerWithPublicMinio(ctx context.Context, t *testing.T, publicEndpoint string) testEnv {
+	return setupTestServerConfigured(ctx, t, func(cfg *config.Config) {
+		cfg.MinioPublicEndpoint = publicEndpoint
+	})
+}
+
+func setupTestServerConfigured(ctx context.Context, t *testing.T, mutate func(*config.Config)) testEnv {
 	gin.SetMode(gin.TestMode)
 
 	databaseURL := os.Getenv("TEST_DATABASE_URL")
@@ -156,12 +163,15 @@ func setupTestServerWithPublicMinio(ctx context.Context, t *testing.T, publicEnd
 		DatabaseURL:         databaseURL,
 		RedisURL:            redisURL,
 		MinioEndpoint:       minioEndpoint,
-		MinioPublicEndpoint: publicEndpoint,
+		MinioPublicEndpoint: "",
 		MinioAccessKey:      "minioadmin",
 		MinioSecretKey:      "minioadmin",
 		MinioBucket:         "store",
 		MinioUseSSL:         false,
 		MigrationsPath:      migrationsDir(),
+	}
+	if mutate != nil {
+		mutate(&cfg)
 	}
 
 	require.NoError(t, app.RunMigrations(cfg))
@@ -169,7 +179,7 @@ func setupTestServerWithPublicMinio(ctx context.Context, t *testing.T, publicEnd
 	deps, err := app.NewDependencies(cfg)
 	require.NoError(t, err)
 
-	router := app.NewRouter(deps.AuthHandler, deps.FileHandler)
+	router := app.NewRouter(deps)
 
 	cleanup := func() {
 		deps.Close()
@@ -195,6 +205,12 @@ func migrationsDir() string {
 }
 
 func doRequest(t *testing.T, client *http.Client, router *gin.Engine, method, path string, body []byte, accessToken string) *http.Response {
+	return doRequestAt(t, client, router, method, path, body, accessToken, "")
+}
+
+var requestAddrSeq atomic.Uint64
+
+func doRequestAt(t *testing.T, client *http.Client, router *gin.Engine, method, path string, body []byte, accessToken, remoteAddr string) *http.Response {
 	var reader io.Reader
 	if body != nil {
 		reader = bytes.NewReader(body)
@@ -207,6 +223,11 @@ func doRequest(t *testing.T, client *http.Client, router *gin.Engine, method, pa
 	if accessToken != "" {
 		req.Header.Set("Authorization", "Bearer "+accessToken)
 	}
+	if remoteAddr == "" {
+		n := requestAddrSeq.Add(1)
+		remoteAddr = fmt.Sprintf("198.51.100.%d:%d", int(n%200)+1, n)
+	}
+	req.RemoteAddr = remoteAddr
 
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, req)

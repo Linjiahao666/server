@@ -14,6 +14,7 @@ import (
 	"github.com/Linjiahao666/server/internal/files"
 	jwtmanager "github.com/Linjiahao666/server/internal/jwt"
 	"github.com/Linjiahao666/server/internal/migrate"
+	"github.com/Linjiahao666/server/internal/ratelimit"
 	"github.com/Linjiahao666/server/internal/repository"
 	"github.com/Linjiahao666/server/internal/storage"
 )
@@ -27,6 +28,7 @@ type Dependencies struct {
 	AuthHandler *auth.Handler
 	FileHandler *files.Handler
 	JWT         *jwtmanager.Manager
+	Limiter     *ratelimit.Limiter
 }
 
 // NewDependencies wires core services.
@@ -66,6 +68,7 @@ func NewDependencies(cfg config.Config) (*Dependencies, error) {
 	authHandler := auth.NewHandler(authService)
 	fileService := files.NewService(fileRepo, uploadRepo, objectStore, jwtManager, blacklistStore)
 	fileHandler := files.NewHandler(fileService)
+	limiter := ratelimit.NewLimiter(redisClient)
 
 	return &Dependencies{
 		Config:      cfg,
@@ -75,6 +78,7 @@ func NewDependencies(cfg config.Config) (*Dependencies, error) {
 		AuthHandler: authHandler,
 		FileHandler: fileHandler,
 		JWT:         jwtManager,
+		Limiter:     limiter,
 	}, nil
 }
 
@@ -94,15 +98,19 @@ func RunMigrations(cfg config.Config) error {
 }
 
 // NewRouter builds the HTTP router.
-func NewRouter(authHandler *auth.Handler, fileHandler *files.Handler) *gin.Engine {
+func NewRouter(deps *Dependencies) *gin.Engine {
 	router := gin.New()
 	router.Use(gin.Recovery())
 
+	authHandler := deps.AuthHandler
+	fileHandler := deps.FileHandler
+	limiter := deps.Limiter
+
 	authGroup := router.Group("/v1/auth")
 	{
-		authGroup.POST("/register", authHandler.Register)
-		authGroup.POST("/login", authHandler.Login)
-		authGroup.POST("/refresh", authHandler.Refresh)
+		authGroup.POST("/register", limiter.Allow("register", deps.Config.RegisterRateLimit()), authHandler.Register)
+		authGroup.POST("/login", limiter.Allow("login", deps.Config.LoginRateLimit()), authHandler.Login)
+		authGroup.POST("/refresh", limiter.Allow("refresh", deps.Config.RefreshRateLimit()), authHandler.Refresh)
 		authGroup.GET("/.well-known/jwks.json", authHandler.JWKS)
 		authGroup.POST("/logout", authHandler.RequireAuth(), authHandler.Logout)
 		authGroup.POST("/logout-all", authHandler.RequireAuth(), authHandler.LogoutAll)

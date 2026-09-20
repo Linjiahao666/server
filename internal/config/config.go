@@ -20,7 +20,16 @@ type Config struct {
 	JWTPrivateKey       string
 	JWTPublicKey        string
 	MigrationsPath      string
+	RateLimitRegister   int
+	RateLimitLogin      int
+	RateLimitRefresh    int
 }
+
+const (
+	defaultRegisterRateLimit = 5
+	defaultLoginRateLimit    = 10
+	defaultRefreshRateLimit  = 30
+)
 
 // Load reads configuration from environment variables.
 func Load() (Config, error) {
@@ -46,6 +55,9 @@ func Load() (Config, error) {
 		JWTPrivateKey:       privateKey,
 		JWTPublicKey:        publicKey,
 		MigrationsPath:      getEnv("MIGRATIONS_PATH", "migrations"),
+		RateLimitRegister:   getEnvInt("RATE_LIMIT_REGISTER", defaultRegisterRateLimit),
+		RateLimitLogin:      getEnvInt("RATE_LIMIT_LOGIN", defaultLoginRateLimit),
+		RateLimitRefresh:    getEnvInt("RATE_LIMIT_REFRESH", defaultRefreshRateLimit),
 	}
 
 	if cfg.DatabaseURL == "" {
@@ -92,4 +104,40 @@ func getEnvBool(key string, fallback bool) bool {
 		return fallback
 	}
 	return parsed
+}
+
+func getEnvInt(key string, fallback int) int {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed <= 0 {
+		return fallback
+	}
+	return parsed
+}
+
+// RegisterRateLimit returns the register limit, using the default when unset.
+func (c Config) RegisterRateLimit() int {
+	if c.RateLimitRegister <= 0 {
+		return defaultRegisterRateLimit
+	}
+	return c.RateLimitRegister
+}
+
+// LoginRateLimit returns the login limit, using the default when unset.
+func (c Config) LoginRateLimit() int {
+	if c.RateLimitLogin <= 0 {
+		return defaultLoginRateLimit
+	}
+	return c.RateLimitLogin
+}
+
+// RefreshRateLimit returns the refresh limit, using the default when unset.
+func (c Config) RefreshRateLimit() int {
+	if c.RateLimitRefresh <= 0 {
+		return defaultRefreshRateLimit
+	}
+	return c.RateLimitRefresh
 }

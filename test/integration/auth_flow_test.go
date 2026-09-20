@@ -13,6 +13,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	rediscontainer "github.com/testcontainers/testcontainers-go/modules/redis"
+
+	"github.com/Linjiahao666/server/internal/config"
 )
 
 func TestAuthFlow(t *testing.T) {
@@ -153,6 +155,53 @@ func requireAuthInvalidToken(t *testing.T, resp *http.Response) {
 	var body apiError
 	decodeJSON(t, resp, &body)
 	require.Equal(t, "AUTH_INVALID_TOKEN", body.Error.Code)
+}
+
+func TestAuthRateLimited(t *testing.T) {
+	ctx := context.Background()
+	env := setupTestServerConfigured(ctx, t, func(cfg *config.Config) {
+		cfg.RateLimitRegister = 1
+		cfg.RateLimitLogin = 1
+	})
+	defer env.Cleanup()
+
+	registerIP := "203.0.113.10:1234"
+	loginIP := "203.0.113.11:1234"
+	username := fmt.Sprintf("user_%d", time.Now().UnixNano())
+	password := "password123"
+	registerBody, _ := json.Marshal(map[string]string{
+		"username": username,
+		"password": password,
+	})
+
+	firstRegister := doRequestAt(t, env.Client, env.Router, http.MethodPost, "/v1/auth/register", registerBody, "", registerIP)
+	require.Equal(t, http.StatusCreated, firstRegister.StatusCode)
+
+	secondRegisterBody, _ := json.Marshal(map[string]string{
+		"username": fmt.Sprintf("user_%d", time.Now().UnixNano()),
+		"password": password,
+	})
+	secondRegister := doRequestAt(t, env.Client, env.Router, http.MethodPost, "/v1/auth/register", secondRegisterBody, "", registerIP)
+	requireRateLimited(t, secondRegister)
+
+	loginBody, _ := json.Marshal(map[string]string{
+		"username": username,
+		"password": password,
+	})
+	firstLogin := doRequestAt(t, env.Client, env.Router, http.MethodPost, "/v1/auth/login", loginBody, "", loginIP)
+	require.Equal(t, http.StatusOK, firstLogin.StatusCode)
+
+	secondLogin := doRequestAt(t, env.Client, env.Router, http.MethodPost, "/v1/auth/login", loginBody, "", loginIP)
+	requireRateLimited(t, secondLogin)
+}
+
+func requireRateLimited(t *testing.T, resp *http.Response) {
+	t.Helper()
+	require.Equal(t, http.StatusTooManyRequests, resp.StatusCode)
+
+	var body apiError
+	decodeJSON(t, resp, &body)
+	require.Equal(t, "RATE_LIMITED", body.Error.Code)
 }
 
 func TestBlacklistKeyFormat(t *testing.T) {

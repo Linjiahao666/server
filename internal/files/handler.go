@@ -41,6 +41,19 @@ type completePartRequest struct {
 }
 
 // UploadSmall handles POST /v1/files.
+//
+//	@Summary		Upload a small file
+//	@Description	Direct upload for objects under 10MB. The created file is ready.
+//	@Tags			files
+//	@Accept			multipart/form-data
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Param			file			formData	file	true	"file bytes"
+//	@Param			content_type	formData	string	false	"content type"
+//	@Success		201				{object}	FileView
+//	@Failure		401				{object}	httpx.APIError
+//	@Failure		413				{object}	httpx.APIError
+//	@Router			/v1/files [post]
 func (h *Handler) UploadSmall(c *gin.Context) {
 	ownerID, ok := auth.UserIDFromContext(c)
 	if !ok {
@@ -81,6 +94,18 @@ func (h *Handler) UploadSmall(c *gin.Context) {
 }
 
 // InitiateUpload handles POST /v1/files/uploads.
+//
+//	@Summary		Initiate multipart upload
+//	@Description	Create a pending file and return presigned part URLs.
+//	@Tags			files
+//	@Accept			json
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Param			body	body		initiateUploadRequest	true	"upload metadata"
+//	@Success		201		{object}	InitiateUploadResult
+//	@Failure		401		{object}	httpx.APIError
+//	@Failure		422		{object}	httpx.APIError
+//	@Router			/v1/files/uploads [post]
 func (h *Handler) InitiateUpload(c *gin.Context) {
 	ownerID, ok := auth.UserIDFromContext(c)
 	if !ok {
@@ -114,6 +139,20 @@ func (h *Handler) InitiateUpload(c *gin.Context) {
 }
 
 // CompleteUpload handles POST /v1/files/uploads/:upload_id/complete.
+//
+//	@Summary		Complete multipart upload
+//	@Description	Mark the file ready and rewrite size_bytes from the stored object.
+//	@Tags			files
+//	@Accept			json
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Param			upload_id	path		string					true	"upload id"
+//	@Param			body		body		completeUploadRequest	true	"uploaded parts"
+//	@Success		200			{object}	FileView
+//	@Failure		401			{object}	httpx.APIError
+//	@Failure		403			{object}	httpx.APIError
+//	@Failure		404			{object}	httpx.APIError
+//	@Router			/v1/files/uploads/{upload_id}/complete [post]
 func (h *Handler) CompleteUpload(c *gin.Context) {
 	ownerID, ok := auth.UserIDFromContext(c)
 	if !ok {
@@ -162,6 +201,17 @@ func (h *Handler) CompleteUpload(c *gin.Context) {
 }
 
 // AbortUpload handles DELETE /v1/files/uploads/:upload_id.
+//
+//	@Summary		Abort multipart upload
+//	@Description	Remove the pending file record and abort storage multipart.
+//	@Tags			files
+//	@Security		BearerAuth
+//	@Param			upload_id	path	string	true	"upload id"
+//	@Success		204
+//	@Failure		401	{object}	httpx.APIError
+//	@Failure		403	{object}	httpx.APIError
+//	@Failure		404	{object}	httpx.APIError
+//	@Router			/v1/files/uploads/{upload_id} [delete]
 func (h *Handler) AbortUpload(c *gin.Context) {
 	ownerID, ok := auth.UserIDFromContext(c)
 	if !ok {
@@ -193,6 +243,18 @@ func (h *Handler) AbortUpload(c *gin.Context) {
 }
 
 // GetFile handles GET /v1/files/:file_id.
+//
+//	@Summary		Get file metadata
+//	@Description	Owner metadata includes status pending or ready.
+//	@Tags			files
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Param			file_id	path		string	true	"file id"
+//	@Success		200		{object}	FileView
+//	@Failure		401		{object}	httpx.APIError
+//	@Failure		403		{object}	httpx.APIError
+//	@Failure		404		{object}	httpx.APIError
+//	@Router			/v1/files/{file_id} [get]
 func (h *Handler) GetFile(c *gin.Context) {
 	ownerID, ok := auth.UserIDFromContext(c)
 	if !ok {
@@ -223,6 +285,17 @@ func (h *Handler) GetFile(c *gin.Context) {
 }
 
 // DeleteFile handles DELETE /v1/files/:file_id.
+//
+//	@Summary		Delete a file
+//	@Description	Remove the object and its metadata.
+//	@Tags			files
+//	@Security		BearerAuth
+//	@Param			file_id	path	string	true	"file id"
+//	@Success		204
+//	@Failure		401	{object}	httpx.APIError
+//	@Failure		403	{object}	httpx.APIError
+//	@Failure		404	{object}	httpx.APIError
+//	@Router			/v1/files/{file_id} [delete]
 func (h *Handler) DeleteFile(c *gin.Context) {
 	ownerID, ok := auth.UserIDFromContext(c)
 	if !ok {
@@ -252,6 +325,19 @@ func (h *Handler) DeleteFile(c *gin.Context) {
 }
 
 // IssueFileAccessToken handles POST /v1/files/:file_id/access-token.
+//
+//	@Summary		Issue file-access token
+//	@Description	Ready files only. Pending files return FILE_NOT_READY.
+//	@Tags			files
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Param			file_id	path		string	true	"file id"
+//	@Success		200		{object}	FileAccessTokenResult
+//	@Failure		401		{object}	httpx.APIError
+//	@Failure		403		{object}	httpx.APIError
+//	@Failure		404		{object}	httpx.APIError
+//	@Failure		409		{object}	httpx.APIError
+//	@Router			/v1/files/{file_id}/access-token [post]
 func (h *Handler) IssueFileAccessToken(c *gin.Context) {
 	ownerID, ok := auth.UserIDFromContext(c)
 	if !ok {
@@ -308,6 +394,20 @@ func (h *Handler) RequireFileAccessAuth() gin.HandlerFunc {
 }
 
 // GetContent handles GET /v1/files/:file_id/content.
+//
+//	@Summary		Download file content
+//	@Description	Range download with a file-access token. Pending files return FILE_NOT_READY.
+//	@Tags			files
+//	@Produce		application/octet-stream
+//	@Security		BearerAuth
+//	@Param			file_id	path	string	true	"file id"
+//	@Param			Range	header	string	false	"byte range"
+//	@Success		200
+//	@Success		206
+//	@Failure		401	{object}	httpx.APIError
+//	@Failure		404	{object}	httpx.APIError
+//	@Failure		409	{object}	httpx.APIError
+//	@Router			/v1/files/{file_id}/content [get]
 func (h *Handler) GetContent(c *gin.Context) {
 	fileID, err := uuid.Parse(c.Param("file_id"))
 	if err != nil {

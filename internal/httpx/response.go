@@ -63,3 +63,9 @@ const StatusNotFound = http.StatusNotFound
 
 // StatusPayloadTooLarge is HTTP 413.
 const StatusPayloadTooLarge = http.StatusRequestEntityTooLarge
+
+// StatusTooManyRequests is HTTP 429.
+const StatusTooManyRequests = http.StatusTooManyRequests
+
+// StatusInternalError is HTTP 500.
+const StatusInternalError = http.StatusInternalServerError
