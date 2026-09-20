@@ -10,6 +10,14 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// FileStatus tracks whether a file is playable.
+type FileStatus string
+
+const (
+	FileStatusPending FileStatus = "pending"
+	FileStatusReady   FileStatus = "ready"
+)
+
 // File represents stored file metadata.
 type File struct {
 	ID          uuid.UUID
@@ -18,6 +26,7 @@ type File struct {
 	ContentType string
 	SizeBytes   int64
 	Filename    string
+	Status      FileStatus
 	CreatedAt   time.Time
 }
 
@@ -53,44 +62,43 @@ func NewFileRepository(pool *pgxpool.Pool) *FileRepository {
 // Create inserts a new file record.
 func (r *FileRepository) Create(ctx context.Context, file File) (File, error) {
 	row := r.pool.QueryRow(ctx, `
-		INSERT INTO files (id, owner_id, object_key, content_type, size_bytes, filename)
-		VALUES ($1, $2, $3, $4, $5, $6)
-		RETURNING id, owner_id, object_key, content_type, size_bytes, filename, created_at
-	`, file.ID, file.OwnerID, file.ObjectKey, file.ContentType, file.SizeBytes, file.Filename)
+		INSERT INTO files (id, owner_id, object_key, content_type, size_bytes, filename, status)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		RETURNING id, owner_id, object_key, content_type, size_bytes, filename, status, created_at
+	`, file.ID, file.OwnerID, file.ObjectKey, file.ContentType, file.SizeBytes, file.Filename, file.Status)
 
-	var created File
-	if err := row.Scan(
-		&created.ID,
-		&created.OwnerID,
-		&created.ObjectKey,
-		&created.ContentType,
-		&created.SizeBytes,
-		&created.Filename,
-		&created.CreatedAt,
-	); err != nil {
-		return File{}, err
-	}
-	return created, nil
+	return scanFile(row)
 }
 
 // FindByID loads a file by ID.
 func (r *FileRepository) FindByID(ctx context.Context, id uuid.UUID) (File, error) {
 	row := r.pool.QueryRow(ctx, `
-		SELECT id, owner_id, object_key, content_type, size_bytes, filename, created_at
+		SELECT id, owner_id, object_key, content_type, size_bytes, filename, status, created_at
 		FROM files
 		WHERE id = $1
 	`, id)
 
-	var file File
-	if err := row.Scan(
-		&file.ID,
-		&file.OwnerID,
-		&file.ObjectKey,
-		&file.ContentType,
-		&file.SizeBytes,
-		&file.Filename,
-		&file.CreatedAt,
-	); err != nil {
+	file, err := scanFile(row)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return File{}, ErrNotFound
+		}
+		return File{}, err
+	}
+	return file, nil
+}
+
+// MarkReady sets the file playable and records the stored object size.
+func (r *FileRepository) MarkReady(ctx context.Context, id uuid.UUID, sizeBytes int64) (File, error) {
+	row := r.pool.QueryRow(ctx, `
+		UPDATE files
+		SET status = $2, size_bytes = $3
+		WHERE id = $1
+		RETURNING id, owner_id, object_key, content_type, size_bytes, filename, status, created_at
+	`, id, FileStatusReady, sizeBytes)
+
+	file, err := scanFile(row)
+	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return File{}, ErrNotFound
 		}
@@ -109,6 +117,23 @@ func (r *FileRepository) Delete(ctx context.Context, id uuid.UUID) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+func scanFile(row pgx.Row) (File, error) {
+	var file File
+	if err := row.Scan(
+		&file.ID,
+		&file.OwnerID,
+		&file.ObjectKey,
+		&file.ContentType,
+		&file.SizeBytes,
+		&file.Filename,
+		&file.Status,
+		&file.CreatedAt,
+	); err != nil {
+		return File{}, err
+	}
+	return file, nil
 }
 
 // UploadRepository persists multipart upload sessions.

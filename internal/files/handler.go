@@ -272,6 +272,8 @@ func (h *Handler) IssueFileAccessToken(c *gin.Context) {
 			httpx.WriteError(c, httpx.StatusNotFound, "FILE_NOT_FOUND", "file not found")
 		case errors.Is(err, ErrFileForbidden):
 			httpx.WriteError(c, httpx.StatusForbidden, "FILE_FORBIDDEN", "you do not own this file")
+		case errors.Is(err, ErrFileNotReady):
+			httpx.WriteError(c, httpx.StatusConflict, "FILE_NOT_READY", "file is not ready")
 		default:
 			httpx.WriteError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to issue file access token")
 		}
@@ -318,6 +320,8 @@ func (h *Handler) GetContent(c *gin.Context) {
 		switch {
 		case errors.Is(err, ErrFileNotFound):
 			httpx.WriteError(c, httpx.StatusNotFound, "FILE_NOT_FOUND", "file not found")
+		case errors.Is(err, ErrFileNotReady):
+			httpx.WriteError(c, httpx.StatusConflict, "FILE_NOT_READY", "file is not ready")
 		case errors.Is(err, ErrRangeNotSatisfiable):
 			httpx.WriteError(c, http.StatusRequestedRangeNotSatisfiable, "RANGE_NOT_SATISFIABLE", "requested range is not satisfiable")
 		default:

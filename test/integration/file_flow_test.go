@@ -10,7 +10,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
+
+	jwtmanager "github.com/Linjiahao666/server/internal/jwt"
 )
 
 type fileResponse struct {
@@ -19,6 +22,7 @@ type fileResponse struct {
 	ContentType string `json:"content_type"`
 	SizeBytes   int64  `json:"size_bytes"`
 	Filename    string `json:"filename"`
+	Status      string `json:"status"`
 	CreatedAt   string `json:"created_at"`
 }
 
@@ -50,6 +54,7 @@ func TestFileFlow(t *testing.T) {
 	require.Equal(t, "image/jpeg", uploaded.ContentType)
 	require.Equal(t, int64(len(smallData)), uploaded.SizeBytes)
 	require.Equal(t, "photo.jpg", uploaded.Filename)
+	require.Equal(t, "ready", uploaded.Status)
 	require.NotEmpty(t, uploaded.ID)
 
 	metaResp := doRequest(t, env.Client, env.Router, http.MethodGet, "/v1/files/"+uploaded.ID, nil, userATokens.AccessToken)
@@ -59,6 +64,7 @@ func TestFileFlow(t *testing.T) {
 	decodeJSON(t, metaResp, &metadata)
 	require.Equal(t, uploaded.ID, metadata.ID)
 	require.Equal(t, uploaded.SizeBytes, metadata.SizeBytes)
+	require.Equal(t, "ready", metadata.Status)
 
 	forbiddenResp := doRequest(t, env.Client, env.Router, http.MethodGet, "/v1/files/"+uploaded.ID, nil, userBTokens.AccessToken)
 	require.Equal(t, http.StatusForbidden, forbiddenResp.StatusCode)
@@ -91,6 +97,46 @@ func TestFileFlow(t *testing.T) {
 	require.Equal(t, partSize, initiated.PartSizeBytes)
 	require.Len(t, initiated.Parts, 2)
 
+	pendingMetaResp := doRequest(t, env.Client, env.Router, http.MethodGet, "/v1/files/"+initiated.FileID, nil, userATokens.AccessToken)
+	require.Equal(t, http.StatusOK, pendingMetaResp.StatusCode)
+	var pendingMeta fileResponse
+	decodeJSON(t, pendingMetaResp, &pendingMeta)
+	require.Equal(t, "pending", pendingMeta.Status)
+
+	pendingTokenResp := doRequest(t, env.Client, env.Router, http.MethodPost, "/v1/files/"+initiated.FileID+"/access-token", nil, userATokens.AccessToken)
+	require.Equal(t, http.StatusConflict, pendingTokenResp.StatusCode)
+	var pendingTokenErr apiError
+	decodeJSON(t, pendingTokenResp, &pendingTokenErr)
+	require.Equal(t, "FILE_NOT_READY", pendingTokenErr.Error.Code)
+
+	meResp := doRequest(t, env.Client, env.Router, http.MethodGet, "/v1/auth/me", nil, userATokens.AccessToken)
+	require.Equal(t, http.StatusOK, meResp.StatusCode)
+	var me userResponse
+	decodeJSON(t, meResp, &me)
+	ownerID, err := uuid.Parse(me.ID)
+	require.NoError(t, err)
+	pendingFileID, err := uuid.Parse(initiated.FileID)
+	require.NoError(t, err)
+	pendingAccess, _, _, err := env.JWT.IssueFileAccessToken(ownerID, pendingFileID)
+	require.NoError(t, err)
+	pendingContentResp := doContentRequest(t, env.Router, initiated.FileID, pendingAccess, "")
+	require.Equal(t, http.StatusConflict, pendingContentResp.StatusCode)
+	var pendingContentErr apiError
+	decodeJSON(t, pendingContentResp, &pendingContentErr)
+	require.Equal(t, "FILE_NOT_READY", pendingContentErr.Error.Code)
+
+	pendingForbiddenResp := doRequest(t, env.Client, env.Router, http.MethodGet, "/v1/files/"+initiated.FileID, nil, userBTokens.AccessToken)
+	require.Equal(t, http.StatusForbidden, pendingForbiddenResp.StatusCode)
+	var pendingForbiddenErr apiError
+	decodeJSON(t, pendingForbiddenResp, &pendingForbiddenErr)
+	require.Equal(t, "FILE_FORBIDDEN", pendingForbiddenErr.Error.Code)
+
+	pendingCrossTokenResp := doRequest(t, env.Client, env.Router, http.MethodPost, "/v1/files/"+initiated.FileID+"/access-token", nil, userBTokens.AccessToken)
+	require.Equal(t, http.StatusForbidden, pendingCrossTokenResp.StatusCode)
+	var pendingCrossTokenErr apiError
+	decodeJSON(t, pendingCrossTokenResp, &pendingCrossTokenErr)
+	require.Equal(t, "FILE_FORBIDDEN", pendingCrossTokenErr.Error.Code)
+
 	etagOne := uploadPart(t, env.Client, initiated.Parts[0].UploadURL, partOne)
 	etagTwo := uploadPart(t, env.Client, initiated.Parts[1].UploadURL, partTwo)
 
@@ -108,9 +154,28 @@ func TestFileFlow(t *testing.T) {
 	require.Equal(t, initiated.FileID, completed.ID)
 	require.Equal(t, totalSize, completed.SizeBytes)
 	require.Equal(t, "video/mp4", completed.ContentType)
+	require.Equal(t, "ready", completed.Status)
 
 	multipartMetaResp := doRequest(t, env.Client, env.Router, http.MethodGet, "/v1/files/"+completed.ID, nil, userATokens.AccessToken)
 	require.Equal(t, http.StatusOK, multipartMetaResp.StatusCode)
+	var multipartMeta fileResponse
+	decodeJSON(t, multipartMetaResp, &multipartMeta)
+	require.Equal(t, "ready", multipartMeta.Status)
+	require.Equal(t, totalSize, multipartMeta.SizeBytes)
+
+	readyTokenResp := doRequest(t, env.Client, env.Router, http.MethodPost, "/v1/files/"+completed.ID+"/access-token", nil, userATokens.AccessToken)
+	require.Equal(t, http.StatusOK, readyTokenResp.StatusCode)
+	var readyAccess fileAccessTokenResponse
+	decodeJSON(t, readyTokenResp, &readyAccess)
+	require.Equal(t, "Bearer", readyAccess.TokenType)
+	require.Equal(t, 300, readyAccess.ExpiresIn)
+	claims, err := env.JWT.ParseFileAccessToken(readyAccess.AccessToken)
+	require.NoError(t, err)
+	require.Contains(t, claims.Audience, jwtmanager.FileAccessAudience)
+
+	rangeResp := doContentRequest(t, env.Router, completed.ID, readyAccess.AccessToken, "bytes=0-9")
+	require.Equal(t, http.StatusPartialContent, rangeResp.StatusCode)
+	require.Equal(t, fmt.Sprintf("bytes 0-9/%d", totalSize), rangeResp.Header.Get("Content-Range"))
 
 	abortBody, _ := json.Marshal(map[string]interface{}{
 		"filename":     "abort.mp4",
@@ -128,6 +193,9 @@ func TestFileFlow(t *testing.T) {
 
 	abortedMetaResp := doRequest(t, env.Client, env.Router, http.MethodGet, "/v1/files/"+abortInitiated.FileID, nil, userATokens.AccessToken)
 	require.Equal(t, http.StatusNotFound, abortedMetaResp.StatusCode)
+	var abortedErr apiError
+	decodeJSON(t, abortedMetaResp, &abortedErr)
+	require.Equal(t, "FILE_NOT_FOUND", abortedErr.Error.Code)
 
 	deleteResp := doRequest(t, env.Client, env.Router, http.MethodDelete, "/v1/files/"+uploaded.ID, nil, userATokens.AccessToken)
 	require.Equal(t, http.StatusNoContent, deleteResp.StatusCode)

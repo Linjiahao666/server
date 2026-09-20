@@ -22,23 +22,24 @@ type FileView struct {
 	ContentType string    `json:"content_type"`
 	SizeBytes   int64     `json:"size_bytes"`
 	Filename    string    `json:"filename,omitempty"`
+	Status      string    `json:"status"`
 	CreatedAt   time.Time `json:"created_at"`
 }
 
 // InitiateUploadInput describes a multipart upload request.
 type InitiateUploadInput struct {
-	Filename       string
-	ContentType    string
-	SizeBytes      int64
-	PartSizeBytes  int64
+	Filename      string
+	ContentType   string
+	SizeBytes     int64
+	PartSizeBytes int64
 }
 
 // InitiateUploadResult contains multipart upload session data.
 type InitiateUploadResult struct {
-	UploadID       uuid.UUID              `json:"upload_id"`
-	FileID         uuid.UUID              `json:"file_id"`
-	PartSizeBytes  int64                  `json:"part_size_bytes"`
-	Parts          []storage.PresignedPart `json:"parts"`
+	UploadID      uuid.UUID               `json:"upload_id"`
+	FileID        uuid.UUID               `json:"file_id"`
+	PartSizeBytes int64                   `json:"part_size_bytes"`
+	Parts         []storage.PresignedPart `json:"parts"`
 }
 
 // CompletePartInput identifies one uploaded part.
@@ -112,6 +113,7 @@ func (s *Service) UploadSmall(
 		ContentType: contentType,
 		SizeBytes:   int64(len(data)),
 		Filename:    filename,
+		Status:      repository.FileStatusReady,
 	})
 	if err != nil {
 		return FileView{}, err
@@ -154,6 +156,7 @@ func (s *Service) InitiateUpload(ctx context.Context, ownerID uuid.UUID, input I
 		ContentType: input.ContentType,
 		SizeBytes:   input.SizeBytes,
 		Filename:    input.Filename,
+		Status:      repository.FileStatusPending,
 	})
 	if err != nil {
 		return InitiateUploadResult{}, err
@@ -231,11 +234,21 @@ func (s *Service) CompleteUpload(ctx context.Context, ownerID, uploadID uuid.UUI
 		return FileView{}, err
 	}
 
+	info, err := s.store.StatObject(ctx, file.ObjectKey)
+	if err != nil {
+		return FileView{}, err
+	}
+
+	readyFile, err := s.files.MarkReady(ctx, file.ID, info.SizeBytes)
+	if err != nil {
+		return FileView{}, err
+	}
+
 	if err := s.uploads.UpdateStatus(ctx, upload.ID, repository.UploadStatusCompleted); err != nil {
 		return FileView{}, err
 	}
 
-	return toFileView(file), nil
+	return toFileView(readyFile), nil
 }
 
 // AbortUpload cancels a pending multipart upload.
@@ -297,6 +310,9 @@ func (s *Service) IssueFileAccessToken(ctx context.Context, ownerID, fileID uuid
 	if file.OwnerID != ownerID {
 		return FileAccessTokenResult{}, ErrFileForbidden
 	}
+	if file.Status != repository.FileStatusReady {
+		return FileAccessTokenResult{}, ErrFileNotReady
+	}
 
 	token, _, _, err := s.jwt.IssueFileAccessToken(ownerID, fileID)
 	if err != nil {
@@ -342,8 +358,19 @@ func (s *Service) GetFileContent(ctx context.Context, fileID uuid.UUID, rangeHea
 		}
 		return FileContentResult{}, err
 	}
+	if file.Status != repository.FileStatusReady {
+		return FileContentResult{}, ErrFileNotReady
+	}
 
-	byteRange, hasRange, err := ParseRangeHeader(rangeHeader, file.SizeBytes)
+	info, err := s.store.StatObject(ctx, file.ObjectKey)
+	if err != nil {
+		if errors.Is(err, storage.ErrObjectNotFound) {
+			return FileContentResult{}, ErrFileNotFound
+		}
+		return FileContentResult{}, err
+	}
+
+	byteRange, hasRange, err := ParseRangeHeader(rangeHeader, info.SizeBytes)
 	if err != nil {
 		return FileContentResult{}, err
 	}
@@ -365,7 +392,7 @@ func (s *Service) GetFileContent(ctx context.Context, fileID uuid.UUID, rangeHea
 	return FileContentResult{
 		Reader:      reader,
 		ContentType: file.ContentType,
-		SizeBytes:   file.SizeBytes,
+		SizeBytes:   info.SizeBytes,
 		Range:       selectedRange,
 	}, nil
 }
@@ -406,6 +433,7 @@ func toFileView(file repository.File) FileView {
 		ContentType: file.ContentType,
 		SizeBytes:   file.SizeBytes,
 		Filename:    file.Filename,
+		Status:      string(file.Status),
 		CreatedAt:   file.CreatedAt,
 	}
 }

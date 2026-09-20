@@ -26,6 +26,9 @@ var ErrFileForbidden = errors.New("file forbidden")
 // ErrFileNotFound indicates the file does not exist.
 var ErrFileNotFound = errors.New("file not found")
 
+// ErrFileNotReady indicates the file has not completed upload.
+var ErrFileNotReady = errors.New("file not ready")
+
 // ErrUploadNotFound indicates the upload session does not exist.
 var ErrUploadNotFound = errors.New("upload not found")
 

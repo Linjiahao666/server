@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,6 +15,9 @@ import (
 
 	"github.com/Linjiahao666/server/internal/config"
 )
+
+// ErrObjectNotFound indicates the object is missing from storage.
+var ErrObjectNotFound = errors.New("object not found")
 
 // CompletedPart identifies a finished multipart upload part.
 type CompletedPart struct {
@@ -117,6 +121,9 @@ func (s *MinioStore) RemoveObject(ctx context.Context, objectKey string) error {
 func (s *MinioStore) StatObject(ctx context.Context, objectKey string) (ObjectInfo, error) {
 	info, err := s.client.StatObject(ctx, s.bucket, objectKey, minio.StatObjectOptions{})
 	if err != nil {
+		if isMissingObject(err) {
+			return ObjectInfo{}, ErrObjectNotFound
+		}
 		return ObjectInfo{}, err
 	}
 	contentType := info.ContentType
@@ -188,4 +195,9 @@ func (s *MinioStore) CompleteMultipartUpload(ctx context.Context, objectKey, upl
 // AbortMultipartUpload cancels a multipart upload.
 func (s *MinioStore) AbortMultipartUpload(ctx context.Context, objectKey, uploadID string) error {
 	return s.core.AbortMultipartUpload(ctx, s.bucket, objectKey, uploadID)
+}
+
+func isMissingObject(err error) bool {
+	resp := minio.ToErrorResponse(err)
+	return resp.Code == "NoSuchKey" || resp.Code == "NotFound"
 }

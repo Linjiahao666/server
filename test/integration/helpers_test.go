@@ -24,6 +24,7 @@ import (
 
 	"github.com/Linjiahao666/server/internal/app"
 	"github.com/Linjiahao666/server/internal/config"
+	jwtmanager "github.com/Linjiahao666/server/internal/jwt"
 )
 
 type apiError struct {
@@ -50,6 +51,7 @@ type testEnv struct {
 	Router  *gin.Engine
 	Cleanup func()
 	Client  *http.Client
+	JWT     *jwtmanager.Manager
 }
 
 func setupTestServer(ctx context.Context, t *testing.T) testEnv {
@@ -180,6 +182,7 @@ func setupTestServerWithPublicMinio(ctx context.Context, t *testing.T, publicEnd
 		Router:  router,
 		Cleanup: cleanup,
 		Client:  &http.Client{Timeout: 30 * time.Second},
+		JWT:     deps.JWT,
 	}
 }
 
