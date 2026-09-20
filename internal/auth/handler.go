@@ -112,7 +112,23 @@ func (h *Handler) Logout(c *gin.Context) {
 	var req logoutRequest
 	_ = c.ShouldBindJSON(&req)
 
-	if err := h.service.Logout(c.Request.Context(), claims.UserID, claims.JTI, claims.ExpiresAt, req.RefreshToken); err != nil {
+	if err := h.service.Logout(c.Request.Context(), claims, req.RefreshToken); err != nil {
+		httpx.WriteError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to logout")
+		return
+	}
+
+	httpx.NoContent(c, httpx.StatusNoContent)
+}
+
+// LogoutAll handles POST /v1/auth/logout-all.
+func (h *Handler) LogoutAll(c *gin.Context) {
+	claims, ok := accessClaimsFromContext(c)
+	if !ok {
+		httpx.WriteError(c, httpx.StatusUnauthorized, "AUTH_INVALID_TOKEN", "access token is invalid or revoked")
+		return
+	}
+
+	if err := h.service.LogoutAll(c.Request.Context(), claims); err != nil {
 		httpx.WriteError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to logout")
 		return
 	}
@@ -145,6 +161,7 @@ func (h *Handler) JWKS(c *gin.Context) {
 // AccessContext stores validated access token data in the request context.
 type AccessContext struct {
 	UserID    uuid.UUID
+	SessionID uuid.UUID
 	JTI       string
 	ExpiresAt time.Time
 }
@@ -184,17 +201,13 @@ func (h *Handler) RequireAuth() gin.HandlerFunc {
 			return
 		}
 
-		userID, jti, expiresAt, err := h.service.ValidateAccessToken(c.Request.Context(), token)
+		claims, err := h.service.ValidateAccessToken(c.Request.Context(), token)
 		if err != nil {
 			httpx.WriteError(c, httpx.StatusUnauthorized, "AUTH_INVALID_TOKEN", "access token is invalid or revoked")
 			return
 		}
 
-		c.Set(string(accessContextKey), AccessContext{
-			UserID:    userID,
-			JTI:       jti,
-			ExpiresAt: expiresAt,
-		})
+		c.Set(string(accessContextKey), claims)
 		c.Next()
 	}
 }

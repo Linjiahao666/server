@@ -105,6 +105,7 @@ func NewRouter(authHandler *auth.Handler, fileHandler *files.Handler) *gin.Engin
 		authGroup.POST("/refresh", authHandler.Refresh)
 		authGroup.GET("/.well-known/jwks.json", authHandler.JWKS)
 		authGroup.POST("/logout", authHandler.RequireAuth(), authHandler.Logout)
+		authGroup.POST("/logout-all", authHandler.RequireAuth(), authHandler.LogoutAll)
 		authGroup.GET("/me", authHandler.RequireAuth(), authHandler.Me)
 	}
 

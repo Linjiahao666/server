@@ -148,5 +148,17 @@ func (r *SessionRepository) Delete(ctx context.Context, sessionID uuid.UUID) err
 	return err
 }
 
+// DeleteOwned removes a session when it belongs to the given user.
+func (r *SessionRepository) DeleteOwned(ctx context.Context, sessionID, userID uuid.UUID) error {
+	_, err := r.pool.Exec(ctx, `DELETE FROM sessions WHERE id = $1 AND user_id = $2`, sessionID, userID)
+	return err
+}
+
+// DeleteByUserID removes all sessions for the user.
+func (r *SessionRepository) DeleteByUserID(ctx context.Context, userID uuid.UUID) error {
+	_, err := r.pool.Exec(ctx, `DELETE FROM sessions WHERE user_id = $1`, userID)
+	return err
+}
+
 // ErrNotFound indicates the requested row does not exist.
 var ErrNotFound = errors.New("not found")
