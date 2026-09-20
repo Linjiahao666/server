@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"testing"
 	"time"
 
@@ -133,4 +134,29 @@ func TestFileFlow(t *testing.T) {
 
 	deletedMetaResp := doRequest(t, env.Client, env.Router, http.MethodGet, "/v1/files/"+uploaded.ID, nil, userATokens.AccessToken)
 	require.Equal(t, http.StatusNotFound, deletedMetaResp.StatusCode)
+}
+
+func TestInitiateUploadURLsUseConfiguredPublicHost(t *testing.T) {
+	ctx := context.Background()
+	publicHost := "files.example.test:9000"
+	env := setupTestServerWithPublicMinio(ctx, t, publicHost)
+	defer env.Cleanup()
+
+	tokens := registerAndLogin(t, env, fmt.Sprintf("presign_host_%d", time.Now().UnixNano()), "password123")
+	initiateBody, _ := json.Marshal(map[string]interface{}{
+		"filename":     "video.mp4",
+		"content_type": "video/mp4",
+		"size_bytes":   10*1024*1024 + 1,
+	})
+	initiateResp := doRequest(t, env.Client, env.Router, http.MethodPost, "/v1/files/uploads", initiateBody, tokens.AccessToken)
+	require.Equal(t, http.StatusCreated, initiateResp.StatusCode)
+
+	var initiated initiateUploadResponse
+	decodeJSON(t, initiateResp, &initiated)
+	require.NotEmpty(t, initiated.Parts)
+	for _, part := range initiated.Parts {
+		parsed, err := url.Parse(part.UploadURL)
+		require.NoError(t, err)
+		require.Equal(t, publicHost, parsed.Host)
+	}
 }

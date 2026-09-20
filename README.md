@@ -24,7 +24,7 @@ cp .env.example .env
 docker compose up --build
 ```
 
-服务默认监听 `http://localhost:8080`。
+服务默认监听 `http://localhost:8080`。分片预签名 PUT 走 `MINIO_PUBLIC_ENDPOINT`，默认部署将 MinIO 绑定 `0.0.0.0:9000`，防火墙需同时放行应用端口与 MinIO 端口。
 
 ## 环境变量
 
@@ -38,11 +38,14 @@ docker compose up --build
 | `DATABASE_URL` | PostgreSQL 连接串 | 必填 |
 | `REDIS_PASSWORD` | Redis 密码 | `store` |
 | `REDIS_URL` | Redis 连接串 | 必填 |
-| `MINIO_ENDPOINT` | MinIO 地址 | `minio:9000` |
+| `MINIO_ENDPOINT` | 容器内 MinIO 地址 | `minio:9000` |
+| `MINIO_PUBLIC_ENDPOINT` | 客户端访问的 MinIO 地址，host:port 不含协议 | 空则预签名使用对内地址 |
+| `MINIO_HOST_BIND` | MinIO 宿主机绑定地址 | `0.0.0.0` |
+| `MINIO_HOST_PORT` | MinIO 宿主机端口 | `9000` |
 | `MINIO_ACCESS_KEY` | MinIO Access Key | `minioadmin` |
 | `MINIO_SECRET_KEY` | MinIO Secret Key | `minioadmin` |
 | `MINIO_BUCKET` | 默认 Bucket 名称 | `store` |
-| `MINIO_USE_SSL` | 是否启用 TLS | `false` |
+| `MINIO_USE_SSL` | 预签名对外入口是否使用 TLS | `false` |
 | `JWT_PRIVATE_KEY` | RS256 私钥 PEM，留空则开发环境自动生成 | 空 |
 | `JWT_PUBLIC_KEY` | RS256 公钥 PEM | 空 |
 | `JWT_PRIVATE_KEY_FILE` | RS256 私钥文件路径 | 空 |

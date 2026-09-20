@@ -53,6 +53,10 @@ type testEnv struct {
 }
 
 func setupTestServer(ctx context.Context, t *testing.T) testEnv {
+	return setupTestServerWithPublicMinio(ctx, t, "")
+}
+
+func setupTestServerWithPublicMinio(ctx context.Context, t *testing.T, publicEndpoint string) testEnv {
 	gin.SetMode(gin.TestMode)
 
 	databaseURL := os.Getenv("TEST_DATABASE_URL")
@@ -146,15 +150,16 @@ func setupTestServer(ctx context.Context, t *testing.T) testEnv {
 	}
 
 	cfg := config.Config{
-		HTTPPort:       "8080",
-		DatabaseURL:    databaseURL,
-		RedisURL:       redisURL,
-		MinioEndpoint:  minioEndpoint,
-		MinioAccessKey: "minioadmin",
-		MinioSecretKey: "minioadmin",
-		MinioBucket:    "store",
-		MinioUseSSL:    false,
-		MigrationsPath: migrationsDir(),
+		HTTPPort:            "8080",
+		DatabaseURL:         databaseURL,
+		RedisURL:            redisURL,
+		MinioEndpoint:       minioEndpoint,
+		MinioPublicEndpoint: publicEndpoint,
+		MinioAccessKey:      "minioadmin",
+		MinioSecretKey:      "minioadmin",
+		MinioBucket:         "store",
+		MinioUseSSL:         false,
+		MigrationsPath:      migrationsDir(),
 	}
 
 	require.NoError(t, app.RunMigrations(cfg))

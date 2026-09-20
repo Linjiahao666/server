@@ -8,17 +8,18 @@ import (
 
 // Config holds runtime configuration loaded from environment variables.
 type Config struct {
-	HTTPPort       string
-	DatabaseURL    string
-	RedisURL       string
-	MinioEndpoint  string
-	MinioAccessKey string
-	MinioSecretKey string
-	MinioBucket    string
-	MinioUseSSL    bool
-	JWTPrivateKey  string
-	JWTPublicKey   string
-	MigrationsPath string
+	HTTPPort            string
+	DatabaseURL         string
+	RedisURL            string
+	MinioEndpoint       string
+	MinioPublicEndpoint string
+	MinioAccessKey      string
+	MinioSecretKey      string
+	MinioBucket         string
+	MinioUseSSL         bool
+	JWTPrivateKey       string
+	JWTPublicKey        string
+	MigrationsPath      string
 }
 
 // Load reads configuration from environment variables.
@@ -33,17 +34,18 @@ func Load() (Config, error) {
 	}
 
 	cfg := Config{
-		HTTPPort:       getEnv("HTTP_PORT", "8080"),
-		DatabaseURL:    os.Getenv("DATABASE_URL"),
-		RedisURL:       os.Getenv("REDIS_URL"),
-		MinioEndpoint:  getEnv("MINIO_ENDPOINT", "localhost:9000"),
-		MinioAccessKey: getEnv("MINIO_ACCESS_KEY", "minioadmin"),
-		MinioSecretKey: getEnv("MINIO_SECRET_KEY", "minioadmin"),
-		MinioBucket:    getEnv("MINIO_BUCKET", "store"),
-		MinioUseSSL:    getEnvBool("MINIO_USE_SSL", false),
-		JWTPrivateKey:  privateKey,
-		JWTPublicKey:   publicKey,
-		MigrationsPath: getEnv("MIGRATIONS_PATH", "migrations"),
+		HTTPPort:            getEnv("HTTP_PORT", "8080"),
+		DatabaseURL:         os.Getenv("DATABASE_URL"),
+		RedisURL:            os.Getenv("REDIS_URL"),
+		MinioEndpoint:       getEnv("MINIO_ENDPOINT", "localhost:9000"),
+		MinioPublicEndpoint: os.Getenv("MINIO_PUBLIC_ENDPOINT"),
+		MinioAccessKey:      getEnv("MINIO_ACCESS_KEY", "minioadmin"),
+		MinioSecretKey:      getEnv("MINIO_SECRET_KEY", "minioadmin"),
+		MinioBucket:         getEnv("MINIO_BUCKET", "store"),
+		MinioUseSSL:         getEnvBool("MINIO_USE_SSL", false),
+		JWTPrivateKey:       privateKey,
+		JWTPublicKey:        publicKey,
+		MigrationsPath:      getEnv("MIGRATIONS_PATH", "migrations"),
 	}
 
 	if cfg.DatabaseURL == "" {

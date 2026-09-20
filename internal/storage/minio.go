@@ -48,18 +48,37 @@ type ObjectStore interface {
 // MinioStore implements ObjectStore with MinIO.
 type MinioStore struct {
 	client *minio.Client
-	core   minio.Core
-	bucket string
+	// presignClient signs multipart PUT URLs with the client-facing MinIO host.
+	presignClient *minio.Client
+	core          minio.Core
+	bucket        string
 }
 
 // NewMinioStore connects to MinIO and ensures the bucket exists.
 func NewMinioStore(cfg config.Config) (*MinioStore, error) {
+	creds := credentials.NewStaticV4(cfg.MinioAccessKey, cfg.MinioSecretKey, "")
+	internalSecure := cfg.MinioUseSSL
+	if cfg.MinioPublicEndpoint != "" {
+		internalSecure = false
+	}
+
 	client, err := minio.New(cfg.MinioEndpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4(cfg.MinioAccessKey, cfg.MinioSecretKey, ""),
-		Secure: cfg.MinioUseSSL,
+		Creds:  creds,
+		Secure: internalSecure,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create minio client: %w", err)
+	}
+
+	presignClient := client
+	if cfg.MinioPublicEndpoint != "" {
+		presignClient, err = minio.New(cfg.MinioPublicEndpoint, &minio.Options{
+			Creds:  creds,
+			Secure: cfg.MinioUseSSL,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("create minio presign client: %w", err)
+		}
 	}
 
 	ctx := context.Background()
@@ -74,9 +93,10 @@ func NewMinioStore(cfg config.Config) (*MinioStore, error) {
 	}
 
 	return &MinioStore{
-		client: client,
-		core:   minio.Core{Client: client},
-		bucket: cfg.MinioBucket,
+		client:        client,
+		presignClient: presignClient,
+		core:          minio.Core{Client: client},
+		bucket:        cfg.MinioBucket,
 	}, nil
 }
 
@@ -140,7 +160,7 @@ func (s *MinioStore) PresignUploadParts(ctx context.Context, objectKey, uploadID
 		reqParams.Set("uploadId", uploadID)
 		reqParams.Set("partNumber", strconv.Itoa(partNumber))
 
-		presignedURL, err := s.client.Presign(ctx, http.MethodPut, s.bucket, objectKey, expiry, reqParams)
+		presignedURL, err := s.presignClient.Presign(ctx, http.MethodPut, s.bucket, objectKey, expiry, reqParams)
 		if err != nil {
 			return nil, err
 		}
