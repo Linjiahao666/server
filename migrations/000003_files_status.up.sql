@@ -1,0 +1,2 @@
+ALTER TABLE files
+    ADD COLUMN status TEXT NOT NULL DEFAULT 'ready';

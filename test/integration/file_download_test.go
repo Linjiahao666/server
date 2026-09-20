@@ -11,6 +11,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+
+	jwtmanager "github.com/Linjiahao666/server/internal/jwt"
 )
 
 type fileAccessTokenResponse struct {
@@ -49,6 +51,9 @@ func TestFileDownloadFlow(t *testing.T) {
 	require.Equal(t, "Bearer", fileAccess.TokenType)
 	require.Equal(t, 300, fileAccess.ExpiresIn)
 	require.NotEmpty(t, fileAccess.AccessToken)
+	claims, err := env.JWT.ParseFileAccessToken(fileAccess.AccessToken)
+	require.NoError(t, err)
+	require.Contains(t, claims.Audience, jwtmanager.FileAccessAudience)
 
 	rangeHeader := "bytes=0-9"
 	rangeResp := doContentRequest(t, env.Router, uploaded.ID, fileAccess.AccessToken, rangeHeader)

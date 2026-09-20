@@ -26,6 +26,7 @@ type Dependencies struct {
 	Auth        *auth.Service
 	AuthHandler *auth.Handler
 	FileHandler *files.Handler
+	JWT         *jwtmanager.Manager
 }
 
 // NewDependencies wires core services.
@@ -73,6 +74,7 @@ func NewDependencies(cfg config.Config) (*Dependencies, error) {
 		Auth:        authService,
 		AuthHandler: authHandler,
 		FileHandler: fileHandler,
+		JWT:         jwtManager,
 	}, nil
 }
 
