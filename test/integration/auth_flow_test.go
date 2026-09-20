@@ -13,6 +13,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	rediscontainer "github.com/testcontainers/testcontainers-go/modules/redis"
+
+	"github.com/Linjiahao666/server/internal/config"
 )
 
 func TestAuthFlow(t *testing.T) {
@@ -75,23 +77,131 @@ func TestAuthFlow(t *testing.T) {
 	decodeJSON(t, jwksResp, &jwks)
 	require.NotEmpty(t, jwks["keys"])
 
-	logoutBody, _ := json.Marshal(map[string]string{
-		"refresh_token": loginTokens.RefreshToken,
-	})
-	logoutResp := doRequest(t, env.Client, env.Router, http.MethodPost, "/v1/auth/logout", logoutBody, loginTokens.AccessToken)
+	logoutResp := doRequest(t, env.Client, env.Router, http.MethodPost, "/v1/auth/logout", nil, loginTokens.AccessToken)
 	require.Equal(t, http.StatusNoContent, logoutResp.StatusCode)
 
 	revokedResp := doRequest(t, env.Client, env.Router, http.MethodGet, "/v1/auth/me", nil, loginTokens.AccessToken)
-	require.Equal(t, http.StatusUnauthorized, revokedResp.StatusCode)
-	var revokedErr apiError
-	decodeJSON(t, revokedResp, &revokedErr)
-	require.Equal(t, "AUTH_INVALID_TOKEN", revokedErr.Error.Code)
+	requireAuthInvalidToken(t, revokedResp)
 
 	refreshAfterLogoutBody, _ := json.Marshal(map[string]string{
 		"refresh_token": loginTokens.RefreshToken,
 	})
 	refreshAfterLogoutResp := doRequest(t, env.Client, env.Router, http.MethodPost, "/v1/auth/refresh", refreshAfterLogoutBody, "")
-	require.Equal(t, http.StatusUnauthorized, refreshAfterLogoutResp.StatusCode)
+	requireAuthInvalidToken(t, refreshAfterLogoutResp)
+}
+
+func TestAuthLogoutIsolatesSessions(t *testing.T) {
+	ctx := context.Background()
+	env := setupTestServer(ctx, t)
+	defer env.Cleanup()
+
+	username := fmt.Sprintf("user_%d", time.Now().UnixNano())
+	password := "password123"
+	first := registerAndLogin(t, env, username, password)
+	second := loginUser(t, env, username, password)
+
+	logoutResp := doRequest(t, env.Client, env.Router, http.MethodPost, "/v1/auth/logout", nil, first.AccessToken)
+	require.Equal(t, http.StatusNoContent, logoutResp.StatusCode)
+
+	firstRefreshBody, _ := json.Marshal(map[string]string{
+		"refresh_token": first.RefreshToken,
+	})
+	firstRefreshResp := doRequest(t, env.Client, env.Router, http.MethodPost, "/v1/auth/refresh", firstRefreshBody, "")
+	requireAuthInvalidToken(t, firstRefreshResp)
+
+	secondRefreshBody, _ := json.Marshal(map[string]string{
+		"refresh_token": second.RefreshToken,
+	})
+	secondRefreshResp := doRequest(t, env.Client, env.Router, http.MethodPost, "/v1/auth/refresh", secondRefreshBody, "")
+	require.Equal(t, http.StatusOK, secondRefreshResp.StatusCode)
+
+	var secondTokens tokenResponse
+	decodeJSON(t, secondRefreshResp, &secondTokens)
+	require.Equal(t, second.RefreshToken, secondTokens.RefreshToken)
+
+	third := loginUser(t, env, username, password)
+	logoutAllResp := doRequest(t, env.Client, env.Router, http.MethodPost, "/v1/auth/logout-all", nil, secondTokens.AccessToken)
+	require.Equal(t, http.StatusNoContent, logoutAllResp.StatusCode)
+
+	refreshAfterAllResp := doRequest(t, env.Client, env.Router, http.MethodPost, "/v1/auth/refresh", secondRefreshBody, "")
+	requireAuthInvalidToken(t, refreshAfterAllResp)
+
+	thirdRefreshBody, _ := json.Marshal(map[string]string{
+		"refresh_token": third.RefreshToken,
+	})
+	thirdRefreshResp := doRequest(t, env.Client, env.Router, http.MethodPost, "/v1/auth/refresh", thirdRefreshBody, "")
+	requireAuthInvalidToken(t, thirdRefreshResp)
+}
+
+func loginUser(t *testing.T, env testEnv, username, password string) tokenResponse {
+	t.Helper()
+
+	loginBody, _ := json.Marshal(map[string]string{
+		"username": username,
+		"password": password,
+	})
+	loginResp := doRequest(t, env.Client, env.Router, http.MethodPost, "/v1/auth/login", loginBody, "")
+	require.Equal(t, http.StatusOK, loginResp.StatusCode)
+
+	var tokens tokenResponse
+	decodeJSON(t, loginResp, &tokens)
+	return tokens
+}
+
+func requireAuthInvalidToken(t *testing.T, resp *http.Response) {
+	t.Helper()
+	require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+
+	var body apiError
+	decodeJSON(t, resp, &body)
+	require.Equal(t, "AUTH_INVALID_TOKEN", body.Error.Code)
+}
+
+func TestAuthRateLimited(t *testing.T) {
+	ctx := context.Background()
+	env := setupTestServerConfigured(ctx, t, func(cfg *config.Config) {
+		cfg.RateLimitRegister = 1
+		cfg.RateLimitLogin = 1
+	})
+	defer env.Cleanup()
+
+	registerIP := "203.0.113.10:1234"
+	loginIP := "203.0.113.11:1234"
+	username := fmt.Sprintf("user_%d", time.Now().UnixNano())
+	password := "password123"
+	registerBody, _ := json.Marshal(map[string]string{
+		"username": username,
+		"password": password,
+	})
+
+	firstRegister := doRequestAt(t, env.Client, env.Router, http.MethodPost, "/v1/auth/register", registerBody, "", registerIP)
+	require.Equal(t, http.StatusCreated, firstRegister.StatusCode)
+
+	secondRegisterBody, _ := json.Marshal(map[string]string{
+		"username": fmt.Sprintf("user_%d", time.Now().UnixNano()),
+		"password": password,
+	})
+	secondRegister := doRequestAt(t, env.Client, env.Router, http.MethodPost, "/v1/auth/register", secondRegisterBody, "", registerIP)
+	requireRateLimited(t, secondRegister)
+
+	loginBody, _ := json.Marshal(map[string]string{
+		"username": username,
+		"password": password,
+	})
+	firstLogin := doRequestAt(t, env.Client, env.Router, http.MethodPost, "/v1/auth/login", loginBody, "", loginIP)
+	require.Equal(t, http.StatusOK, firstLogin.StatusCode)
+
+	secondLogin := doRequestAt(t, env.Client, env.Router, http.MethodPost, "/v1/auth/login", loginBody, "", loginIP)
+	requireRateLimited(t, secondLogin)
+}
+
+func requireRateLimited(t *testing.T, resp *http.Response) {
+	t.Helper()
+	require.Equal(t, http.StatusTooManyRequests, resp.StatusCode)
+
+	var body apiError
+	decodeJSON(t, resp, &body)
+	require.Equal(t, "RATE_LIMITED", body.Error.Code)
 }
 
 func TestBlacklistKeyFormat(t *testing.T) {

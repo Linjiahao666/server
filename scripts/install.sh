@@ -223,6 +223,69 @@ pull_secrets() {
   fi
 }
 
+looks_like_ipv4() {
+  [[ "$1" =~ ^[0-9]+(\.[0-9]+){3}$ ]]
+}
+
+validate_minio_publish() {
+  local bind="$1"
+  local endpoint="$2"
+  if [[ "$endpoint" == *"://"* ]]; then
+    die "MinIO 对外地址请填写 host:port，不要包含协议。"
+  fi
+  if [[ "$endpoint" != *:* ]]; then
+    die "MinIO 对外地址必须是 host:port。"
+  fi
+  local host="${endpoint%:*}"
+  local port="${endpoint##*:}"
+  [[ -n "$host" && "$port" =~ ^[0-9]+$ ]] || die "MinIO 对外地址必须是 host:port。"
+  if [[ "$bind" == "127.0.0.1" || "$bind" == "localhost" ]]; then
+    if looks_like_ipv4 "$host" || [[ "$host" == "localhost" ]]; then
+      die "MinIO 绑定 127.0.0.1 时，对外地址必须是反向代理后的公网主机名。"
+    fi
+  fi
+}
+
+fill_minio_public_settings() {
+  local -n port_out="$1"
+  local -n endpoint_out="$2"
+  local -n bind_out="$3"
+  local -n ssl_out="$4"
+  local detected_ip default_ssl
+  port_out="$(prompt "MinIO 对外端口" "9000")"
+  detected_ip="$(public_ip)"
+  endpoint_out="$(prompt "MinIO 客户端访问地址" "${detected_ip:-127.0.0.1}:${port_out}")"
+  bind_out="$(prompt "MinIO 宿主机绑定地址" "0.0.0.0")"
+  default_ssl="false"
+  if [[ "$bind_out" == "127.0.0.1" || "$bind_out" == "localhost" ]]; then
+    default_ssl="true"
+  fi
+  ssl_out="$(prompt "MinIO 对外是否启用 TLS" "$default_ssl")"
+  validate_minio_publish "$bind_out" "$endpoint_out"
+}
+
+append_env_if_missing() {
+  local file="$1"
+  local key="$2"
+  local value="$3"
+  grep -q "^${key}=" "$file" || printf '%s=%s\n' "$key" "$value" >>"$file"
+}
+
+ensure_minio_public_env() {
+  local dir="$1"
+  local env_file="$dir/.env"
+  if grep -q '^MINIO_PUBLIC_ENDPOINT=' "$env_file" && grep -q '^MINIO_HOST_BIND=' "$env_file" && grep -q '^MINIO_HOST_PORT=' "$env_file"; then
+    validate_minio_publish "$(grep '^MINIO_HOST_BIND=' "$env_file" | cut -d= -f2-)" "$(grep '^MINIO_PUBLIC_ENDPOINT=' "$env_file" | cut -d= -f2-)"
+    return
+  fi
+  local minio_host_port minio_public_endpoint minio_host_bind minio_use_ssl
+  fill_minio_public_settings minio_host_port minio_public_endpoint minio_host_bind minio_use_ssl
+  append_env_if_missing "$env_file" MINIO_PUBLIC_ENDPOINT "$minio_public_endpoint"
+  append_env_if_missing "$env_file" MINIO_HOST_BIND "$minio_host_bind"
+  append_env_if_missing "$env_file" MINIO_HOST_PORT "$minio_host_port"
+  append_env_if_missing "$env_file" MINIO_USE_SSL "$minio_use_ssl"
+}
+
 write_env() {
   local dir="$1"
   local host_port="$2"
@@ -230,6 +293,10 @@ write_env() {
   local redis_password="$4"
   local minio_access="$5"
   local minio_secret="$6"
+  local minio_public_endpoint="$7"
+  local minio_host_bind="$8"
+  local minio_host_port="$9"
+  local minio_use_ssl="${10}"
   cat >"$dir/.env" <<EOF
 HOST_PORT=${host_port}
 HTTP_PORT=8080
@@ -240,10 +307,13 @@ DATABASE_URL=postgres://store:${postgres_password}@postgres:5432/store?sslmode=d
 REDIS_PASSWORD=${redis_password}
 REDIS_URL=redis://:${redis_password}@redis:6379/0
 MINIO_ENDPOINT=minio:9000
+MINIO_PUBLIC_ENDPOINT=${minio_public_endpoint}
+MINIO_HOST_BIND=${minio_host_bind}
+MINIO_HOST_PORT=${minio_host_port}
 MINIO_ACCESS_KEY=${minio_access}
 MINIO_SECRET_KEY=${minio_secret}
 MINIO_BUCKET=store
-MINIO_USE_SSL=false
+MINIO_USE_SSL=${minio_use_ssl}
 JWT_PRIVATE_KEY=
 JWT_PUBLIC_KEY=
 JWT_PRIVATE_KEY_FILE=/run/secrets/jwt-private.pem
@@ -263,8 +333,10 @@ generate_jwt() {
 create_config() {
   local dir="$1"
   local host_port postgres_password redis_password minio_access minio_secret
+  local minio_host_port minio_public_endpoint minio_host_bind minio_use_ssl
   say "密码全部直接回车即可自动生成，JWT 密钥也会自动写入。"
   host_port="$(prompt "对外访问端口" "8080")"
+  fill_minio_public_settings minio_host_port minio_public_endpoint minio_host_bind minio_use_ssl
   postgres_password="$(prompt "PostgreSQL 密码，回车则自动生成" "")"
   redis_password="$(prompt "Redis 密码，回车则自动生成" "")"
   minio_access="$(prompt "MinIO Access Key，回车则自动生成" "")"
@@ -274,7 +346,7 @@ create_config() {
   [[ -n "$minio_access" ]] || minio_access="$(openssl rand -hex 8)"
   [[ -n "$minio_secret" ]] || minio_secret="$(openssl rand -hex 16)"
   generate_jwt "$dir"
-  write_env "$dir" "$host_port" "$postgres_password" "$redis_password" "$minio_access" "$minio_secret"
+  write_env "$dir" "$host_port" "$postgres_password" "$redis_password" "$minio_access" "$minio_secret" "$minio_public_endpoint" "$minio_host_bind" "$minio_host_port" "$minio_use_ssl"
   say "已写入 $dir/.env，并生成 JWT 密钥。"
 }
 
@@ -366,6 +438,7 @@ main() {
     create_config "$install_dir"
   fi
   grep -q '^HOST_PORT=' "$install_dir/.env" || die ".env 缺少 HOST_PORT。"
+  ensure_minio_public_env "$install_dir"
 
   say ""
   say "[5/6] 启动 Docker 服务"
@@ -388,8 +461,11 @@ main() {
     push_secrets "$install_dir"
   fi
 
-  local ip
+  local ip minio_host_port minio_public_endpoint
   ip="$(public_ip)"
+  minio_host_port="$(grep '^MINIO_HOST_PORT=' "$install_dir/.env" | cut -d= -f2-)"
+  minio_public_endpoint="$(grep '^MINIO_PUBLIC_ENDPOINT=' "$install_dir/.env" | cut -d= -f2-)"
+  [[ -n "$minio_host_port" ]] || minio_host_port=9000
   say ""
   say "========================================"
   say " 部署完成"
@@ -397,8 +473,8 @@ main() {
   say "安装目录：$install_dir"
   say "访问地址：http://${ip:-127.0.0.1}:${host_port}"
   say "本机探测：http://127.0.0.1:${host_port}/v1/auth/.well-known/jwks.json"
-  say "MinIO 控制台：http://127.0.0.1:9001"
-  say "请在防火墙或宝塔面板放行 ${host_port} 端口。"
+  say "MinIO 对外地址：${minio_public_endpoint}"
+  say "请在防火墙或宝塔面板放行 ${host_port} 与 ${minio_host_port} 端口。"
 }
 
 main "$@"

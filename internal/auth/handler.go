@@ -36,6 +36,18 @@ type logoutRequest struct {
 }
 
 // Register handles POST /v1/auth/register.
+//
+//	@Summary		Register a user
+//	@Description	Create a new user account. Limited by client IP.
+//	@Tags			auth
+//	@Accept			json
+//	@Produce		json
+//	@Param			body	body		registerRequest	true	"username and password"
+//	@Success		201		{object}	UserView
+//	@Failure		409		{object}	httpx.APIError
+//	@Failure		422		{object}	httpx.APIError
+//	@Failure		429		{object}	httpx.APIError
+//	@Router			/v1/auth/register [post]
 func (h *Handler) Register(c *gin.Context) {
 	var req registerRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -60,6 +72,17 @@ func (h *Handler) Register(c *gin.Context) {
 }
 
 // Login handles POST /v1/auth/login.
+//
+//	@Summary		Login
+//	@Description	Issue access and refresh tokens. Limited by client IP.
+//	@Tags			auth
+//	@Accept			json
+//	@Produce		json
+//	@Param			body	body		registerRequest	true	"username and password"
+//	@Success		200		{object}	TokenPair
+//	@Failure		401		{object}	httpx.APIError
+//	@Failure		429		{object}	httpx.APIError
+//	@Router			/v1/auth/login [post]
 func (h *Handler) Login(c *gin.Context) {
 	var req registerRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -81,6 +104,17 @@ func (h *Handler) Login(c *gin.Context) {
 }
 
 // Refresh handles POST /v1/auth/refresh.
+//
+//	@Summary		Refresh access token
+//	@Description	Issue a new access token for an existing session. Limited by client IP.
+//	@Tags			auth
+//	@Accept			json
+//	@Produce		json
+//	@Param			body	body		refreshRequest	true	"refresh token"
+//	@Success		200		{object}	TokenPair
+//	@Failure		401		{object}	httpx.APIError
+//	@Failure		429		{object}	httpx.APIError
+//	@Router			/v1/auth/refresh [post]
 func (h *Handler) Refresh(c *gin.Context) {
 	var req refreshRequest
 	if err := c.ShouldBindJSON(&req); err != nil || req.RefreshToken == "" {
@@ -102,6 +136,17 @@ func (h *Handler) Refresh(c *gin.Context) {
 }
 
 // Logout handles POST /v1/auth/logout.
+//
+//	@Summary		Logout current session
+//	@Description	Blacklist the access jti and delete the session bound to sid. refresh_token in the body is optional.
+//	@Tags			auth
+//	@Accept			json
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Param			body	body	logoutRequest	false	"optional refresh token"
+//	@Success		204
+//	@Failure		401	{object}	httpx.APIError
+//	@Router			/v1/auth/logout [post]
 func (h *Handler) Logout(c *gin.Context) {
 	claims, ok := accessClaimsFromContext(c)
 	if !ok {
@@ -112,7 +157,32 @@ func (h *Handler) Logout(c *gin.Context) {
 	var req logoutRequest
 	_ = c.ShouldBindJSON(&req)
 
-	if err := h.service.Logout(c.Request.Context(), claims.UserID, claims.JTI, claims.ExpiresAt, req.RefreshToken); err != nil {
+	if err := h.service.Logout(c.Request.Context(), claims, req.RefreshToken); err != nil {
+		httpx.WriteError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to logout")
+		return
+	}
+
+	httpx.NoContent(c, httpx.StatusNoContent)
+}
+
+// LogoutAll handles POST /v1/auth/logout-all.
+//
+//	@Summary		Logout all sessions
+//	@Description	Delete every session for the user and blacklist the current access jti.
+//	@Tags			auth
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Success		204
+//	@Failure		401	{object}	httpx.APIError
+//	@Router			/v1/auth/logout-all [post]
+func (h *Handler) LogoutAll(c *gin.Context) {
+	claims, ok := accessClaimsFromContext(c)
+	if !ok {
+		httpx.WriteError(c, httpx.StatusUnauthorized, "AUTH_INVALID_TOKEN", "access token is invalid or revoked")
+		return
+	}
+
+	if err := h.service.LogoutAll(c.Request.Context(), claims); err != nil {
 		httpx.WriteError(c, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to logout")
 		return
 	}
@@ -121,6 +191,15 @@ func (h *Handler) Logout(c *gin.Context) {
 }
 
 // Me handles GET /v1/auth/me.
+//
+//	@Summary		Current user
+//	@Description	Return the authenticated user profile.
+//	@Tags			auth
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Success		200	{object}	UserView
+//	@Failure		401	{object}	httpx.APIError
+//	@Router			/v1/auth/me [get]
 func (h *Handler) Me(c *gin.Context) {
 	userID, ok := userIDFromContext(c)
 	if !ok {
@@ -138,6 +217,13 @@ func (h *Handler) Me(c *gin.Context) {
 }
 
 // JWKS handles GET /v1/auth/.well-known/jwks.json.
+//
+//	@Summary		JSON Web Key Set
+//	@Description	Public keys for local RS256 verification. Callers then check auth:bl:{jti} in Redis.
+//	@Tags			auth
+//	@Produce		json
+//	@Success		200	{object}	map[string]interface{}
+//	@Router			/v1/auth/.well-known/jwks.json [get]
 func (h *Handler) JWKS(c *gin.Context) {
 	httpx.WriteJSON(c, http.StatusOK, h.service.JWKS())
 }
@@ -145,6 +231,7 @@ func (h *Handler) JWKS(c *gin.Context) {
 // AccessContext stores validated access token data in the request context.
 type AccessContext struct {
 	UserID    uuid.UUID
+	SessionID uuid.UUID
 	JTI       string
 	ExpiresAt time.Time
 }
@@ -184,17 +271,13 @@ func (h *Handler) RequireAuth() gin.HandlerFunc {
 			return
 		}
 
-		userID, jti, expiresAt, err := h.service.ValidateAccessToken(c.Request.Context(), token)
+		claims, err := h.service.ValidateAccessToken(c.Request.Context(), token)
 		if err != nil {
 			httpx.WriteError(c, httpx.StatusUnauthorized, "AUTH_INVALID_TOKEN", "access token is invalid or revoked")
 			return
 		}
 
-		c.Set(string(accessContextKey), AccessContext{
-			UserID:    userID,
-			JTI:       jti,
-			ExpiresAt: expiresAt,
-		})
+		c.Set(string(accessContextKey), claims)
 		c.Next()
 	}
 }

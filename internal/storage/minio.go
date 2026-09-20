@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,6 +15,9 @@ import (
 
 	"github.com/Linjiahao666/server/internal/config"
 )
+
+// ErrObjectNotFound indicates the object is missing from storage.
+var ErrObjectNotFound = errors.New("object not found")
 
 // CompletedPart identifies a finished multipart upload part.
 type CompletedPart struct {
@@ -48,18 +52,37 @@ type ObjectStore interface {
 // MinioStore implements ObjectStore with MinIO.
 type MinioStore struct {
 	client *minio.Client
-	core   minio.Core
-	bucket string
+	// presignClient signs multipart PUT URLs with the client-facing MinIO host.
+	presignClient *minio.Client
+	core          minio.Core
+	bucket        string
 }
 
 // NewMinioStore connects to MinIO and ensures the bucket exists.
 func NewMinioStore(cfg config.Config) (*MinioStore, error) {
+	creds := credentials.NewStaticV4(cfg.MinioAccessKey, cfg.MinioSecretKey, "")
+	internalSecure := cfg.MinioUseSSL
+	if cfg.MinioPublicEndpoint != "" {
+		internalSecure = false
+	}
+
 	client, err := minio.New(cfg.MinioEndpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4(cfg.MinioAccessKey, cfg.MinioSecretKey, ""),
-		Secure: cfg.MinioUseSSL,
+		Creds:  creds,
+		Secure: internalSecure,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create minio client: %w", err)
+	}
+
+	presignClient := client
+	if cfg.MinioPublicEndpoint != "" {
+		presignClient, err = minio.New(cfg.MinioPublicEndpoint, &minio.Options{
+			Creds:  creds,
+			Secure: cfg.MinioUseSSL,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("create minio presign client: %w", err)
+		}
 	}
 
 	ctx := context.Background()
@@ -74,9 +97,10 @@ func NewMinioStore(cfg config.Config) (*MinioStore, error) {
 	}
 
 	return &MinioStore{
-		client: client,
-		core:   minio.Core{Client: client},
-		bucket: cfg.MinioBucket,
+		client:        client,
+		presignClient: presignClient,
+		core:          minio.Core{Client: client},
+		bucket:        cfg.MinioBucket,
 	}, nil
 }
 
@@ -97,6 +121,9 @@ func (s *MinioStore) RemoveObject(ctx context.Context, objectKey string) error {
 func (s *MinioStore) StatObject(ctx context.Context, objectKey string) (ObjectInfo, error) {
 	info, err := s.client.StatObject(ctx, s.bucket, objectKey, minio.StatObjectOptions{})
 	if err != nil {
+		if isMissingObject(err) {
+			return ObjectInfo{}, ErrObjectNotFound
+		}
 		return ObjectInfo{}, err
 	}
 	contentType := info.ContentType
@@ -140,7 +167,7 @@ func (s *MinioStore) PresignUploadParts(ctx context.Context, objectKey, uploadID
 		reqParams.Set("uploadId", uploadID)
 		reqParams.Set("partNumber", strconv.Itoa(partNumber))
 
-		presignedURL, err := s.client.Presign(ctx, http.MethodPut, s.bucket, objectKey, expiry, reqParams)
+		presignedURL, err := s.presignClient.Presign(ctx, http.MethodPut, s.bucket, objectKey, expiry, reqParams)
 		if err != nil {
 			return nil, err
 		}
@@ -168,4 +195,9 @@ func (s *MinioStore) CompleteMultipartUpload(ctx context.Context, objectKey, upl
 // AbortMultipartUpload cancels a multipart upload.
 func (s *MinioStore) AbortMultipartUpload(ctx context.Context, objectKey, uploadID string) error {
 	return s.core.AbortMultipartUpload(ctx, s.bucket, objectKey, uploadID)
+}
+
+func isMissingObject(err error) bool {
+	resp := minio.ToErrorResponse(err)
+	return resp.Code == "NoSuchKey" || resp.Code == "NotFound"
 }

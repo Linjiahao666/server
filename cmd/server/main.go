@@ -1,3 +1,14 @@
+// Store authentication and file HTTP service.
+//
+//	@title			Store Server API
+//	@version		1.0
+//	@description	Authentication and file APIs for the store service.
+//	@BasePath		/
+//	@securityDefinitions.apikey	BearerAuth
+//	@in							header
+//	@name						Authorization
+//
+//go:generate go run github.com/swaggo/swag/cmd/swag@v1.16.4 init -g main.go -d ./,../../internal --parseInternal -o ../../docs/swagger
 package main
 
 import (
@@ -29,7 +40,7 @@ func main() {
 	}
 	defer deps.Close()
 
-	router := app.NewRouter(deps.AuthHandler, deps.FileHandler)
+	router := app.NewRouter(deps)
 	server := &http.Server{
 		Addr:    ":" + cfg.HTTPPort,
 		Handler: router,

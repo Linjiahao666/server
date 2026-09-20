@@ -18,6 +18,8 @@ services:
     image: redis:7-alpine
     restart: unless-stopped
     command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:-store}"]
+    ports:
+      - "127.0.0.1:${REDIS_HOST_PORT:-6379}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-store}", "ping"]
       interval: 5s
@@ -28,9 +30,12 @@ services:
     image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
     restart: unless-stopped
     command: server /data --console-address ":9001"
+    ports:
+      - "${MINIO_HOST_BIND:-0.0.0.0}:${MINIO_HOST_PORT:-9000}:9000"
     environment:
       MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_API_CORS_ALLOW_ORIGIN: "*"
     volumes:
       - minio_data:/data
 
@@ -48,7 +53,8 @@ services:
       DATABASE_URL: postgres://${POSTGRES_USER:-store}:${POSTGRES_PASSWORD:-store}@postgres:5432/${POSTGRES_DB:-store}?sslmode=disable
       REDIS_URL: redis://:${REDIS_PASSWORD:-store}@redis:6379/0
       MINIO_ENDPOINT: minio:9000
-      MINIO_USE_SSL: "false"
+      MINIO_PUBLIC_ENDPOINT: ${MINIO_PUBLIC_ENDPOINT:-}
+      MINIO_USE_SSL: ${MINIO_USE_SSL:-false}
       HTTP_PORT: "8080"
       JWT_PRIVATE_KEY_FILE: ${JWT_PRIVATE_KEY_FILE:-}
       JWT_PUBLIC_KEY_FILE: ${JWT_PUBLIC_KEY_FILE:-}

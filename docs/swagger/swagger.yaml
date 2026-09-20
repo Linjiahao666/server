@@ -1,0 +1,579 @@
+basePath: /
+definitions:
+  auth.TokenPair:
+    properties:
+      access_token:
+        type: string
+      expires_in:
+        type: integer
+      refresh_token:
+        type: string
+      token_type:
+        type: string
+    type: object
+  auth.UserView:
+    properties:
+      created_at:
+        type: string
+      id:
+        type: string
+      username:
+        type: string
+    type: object
+  auth.logoutRequest:
+    properties:
+      refresh_token:
+        type: string
+    type: object
+  auth.refreshRequest:
+    properties:
+      refresh_token:
+        type: string
+    type: object
+  auth.registerRequest:
+    properties:
+      password:
+        type: string
+      username:
+        type: string
+    type: object
+  files.FileAccessTokenResult:
+    properties:
+      access_token:
+        type: string
+      expires_in:
+        type: integer
+      token_type:
+        type: string
+    type: object
+  files.FileView:
+    properties:
+      content_type:
+        type: string
+      created_at:
+        type: string
+      filename:
+        type: string
+      id:
+        type: string
+      owner_id:
+        type: string
+      size_bytes:
+        type: integer
+      status:
+        type: string
+    type: object
+  files.InitiateUploadResult:
+    properties:
+      file_id:
+        type: string
+      part_size_bytes:
+        type: integer
+      parts:
+        items:
+          $ref: '#/definitions/storage.PresignedPart'
+        type: array
+      upload_id:
+        type: string
+    type: object
+  files.completePartRequest:
+    properties:
+      etag:
+        type: string
+      part_number:
+        type: integer
+    type: object
+  files.completeUploadRequest:
+    properties:
+      parts:
+        items:
+          $ref: '#/definitions/files.completePartRequest'
+        type: array
+    type: object
+  files.initiateUploadRequest:
+    properties:
+      content_type:
+        type: string
+      filename:
+        type: string
+      part_size_bytes:
+        type: integer
+      size_bytes:
+        type: integer
+    type: object
+  httpx.APIError:
+    properties:
+      error:
+        $ref: '#/definitions/httpx.ErrorDetail'
+    type: object
+  httpx.ErrorDetail:
+    properties:
+      code:
+        type: string
+      message:
+        type: string
+    type: object
+  storage.PresignedPart:
+    properties:
+      part_number:
+        type: integer
+      upload_url:
+        type: string
+    type: object
+info:
+  contact: {}
+  description: Authentication and file APIs for the store service.
+  title: Store Server API
+  version: "1.0"
+paths:
+  /v1/auth/.well-known/jwks.json:
+    get:
+      description: Public keys for local RS256 verification. Callers then check auth:bl:{jti}
+        in Redis.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: JSON Web Key Set
+      tags:
+      - auth
+  /v1/auth/login:
+    post:
+      consumes:
+      - application/json
+      description: Issue access and refresh tokens. Limited by client IP.
+      parameters:
+      - description: username and password
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/auth.registerRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/auth.TokenPair'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httpx.APIError'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/httpx.APIError'
+      summary: Login
+      tags:
+      - auth
+  /v1/auth/logout:
+    post:
+      consumes:
+      - application/json
+      description: Blacklist the access jti and delete the session bound to sid. refresh_token
+        in the body is optional.
+      parameters:
+      - description: optional refresh token
+        in: body
+        name: body
+        schema:
+          $ref: '#/definitions/auth.logoutRequest'
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httpx.APIError'
+      security:
+      - BearerAuth: []
+      summary: Logout current session
+      tags:
+      - auth
+  /v1/auth/logout-all:
+    post:
+      description: Delete every session for the user and blacklist the current access
+        jti.
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httpx.APIError'
+      security:
+      - BearerAuth: []
+      summary: Logout all sessions
+      tags:
+      - auth
+  /v1/auth/me:
+    get:
+      description: Return the authenticated user profile.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/auth.UserView'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httpx.APIError'
+      security:
+      - BearerAuth: []
+      summary: Current user
+      tags:
+      - auth
+  /v1/auth/refresh:
+    post:
+      consumes:
+      - application/json
+      description: Issue a new access token for an existing session. Limited by client
+        IP.
+      parameters:
+      - description: refresh token
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/auth.refreshRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/auth.TokenPair'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httpx.APIError'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/httpx.APIError'
+      summary: Refresh access token
+      tags:
+      - auth
+  /v1/auth/register:
+    post:
+      consumes:
+      - application/json
+      description: Create a new user account. Limited by client IP.
+      parameters:
+      - description: username and password
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/auth.registerRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/auth.UserView'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httpx.APIError'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/httpx.APIError'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/httpx.APIError'
+      summary: Register a user
+      tags:
+      - auth
+  /v1/files:
+    post:
+      consumes:
+      - multipart/form-data
+      description: Direct upload for objects under 10MB. The created file is ready.
+      parameters:
+      - description: file bytes
+        in: formData
+        name: file
+        required: true
+        type: file
+      - description: content type
+        in: formData
+        name: content_type
+        type: string
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/files.FileView'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httpx.APIError'
+        "413":
+          description: Request Entity Too Large
+          schema:
+            $ref: '#/definitions/httpx.APIError'
+      security:
+      - BearerAuth: []
+      summary: Upload a small file
+      tags:
+      - files
+  /v1/files/{file_id}:
+    delete:
+      description: Remove the object and its metadata.
+      parameters:
+      - description: file id
+        in: path
+        name: file_id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httpx.APIError'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httpx.APIError'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httpx.APIError'
+      security:
+      - BearerAuth: []
+      summary: Delete a file
+      tags:
+      - files
+    get:
+      description: Owner metadata includes status pending or ready.
+      parameters:
+      - description: file id
+        in: path
+        name: file_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/files.FileView'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httpx.APIError'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httpx.APIError'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httpx.APIError'
+      security:
+      - BearerAuth: []
+      summary: Get file metadata
+      tags:
+      - files
+  /v1/files/{file_id}/access-token:
+    post:
+      description: Ready files only. Pending files return FILE_NOT_READY.
+      parameters:
+      - description: file id
+        in: path
+        name: file_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/files.FileAccessTokenResult'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httpx.APIError'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httpx.APIError'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httpx.APIError'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httpx.APIError'
+      security:
+      - BearerAuth: []
+      summary: Issue file-access token
+      tags:
+      - files
+  /v1/files/{file_id}/content:
+    get:
+      description: Range download with a file-access token. Pending files return FILE_NOT_READY.
+      parameters:
+      - description: file id
+        in: path
+        name: file_id
+        required: true
+        type: string
+      - description: byte range
+        in: header
+        name: Range
+        type: string
+      produces:
+      - application/octet-stream
+      responses:
+        "200":
+          description: OK
+        "206":
+          description: Partial Content
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httpx.APIError'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httpx.APIError'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httpx.APIError'
+      security:
+      - BearerAuth: []
+      summary: Download file content
+      tags:
+      - files
+  /v1/files/uploads:
+    post:
+      consumes:
+      - application/json
+      description: Create a pending file and return presigned part URLs.
+      parameters:
+      - description: upload metadata
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/files.initiateUploadRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/files.InitiateUploadResult'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httpx.APIError'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/httpx.APIError'
+      security:
+      - BearerAuth: []
+      summary: Initiate multipart upload
+      tags:
+      - files
+  /v1/files/uploads/{upload_id}:
+    delete:
+      description: Remove the pending file record and abort storage multipart.
+      parameters:
+      - description: upload id
+        in: path
+        name: upload_id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httpx.APIError'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httpx.APIError'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httpx.APIError'
+      security:
+      - BearerAuth: []
+      summary: Abort multipart upload
+      tags:
+      - files
+  /v1/files/uploads/{upload_id}/complete:
+    post:
+      consumes:
+      - application/json
+      description: Mark the file ready and rewrite size_bytes from the stored object.
+      parameters:
+      - description: upload id
+        in: path
+        name: upload_id
+        required: true
+        type: string
+      - description: uploaded parts
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/files.completeUploadRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/files.FileView'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httpx.APIError'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httpx.APIError'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httpx.APIError'
+      security:
+      - BearerAuth: []
+      summary: Complete multipart upload
+      tags:
+      - files
+securityDefinitions:
+  BearerAuth:
+    in: header
+    name: Authorization
+    type: apiKey
+swagger: "2.0"
