@@ -114,7 +114,7 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (TokenPair, 
 		return TokenPair{}, ErrInvalidRefreshToken
 	}
 
-	accessToken, _, _, err := s.jwt.IssueAccessToken(session.UserID)
+	accessToken, _, _, err := s.jwt.IssueAccessToken(session.UserID, session.ID)
 	if err != nil {
 		return TokenPair{}, err
 	}
@@ -128,20 +128,32 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (TokenPair, 
 }
 
 // Logout revokes the access token JTI and deletes the refresh session.
-func (s *Service) Logout(ctx context.Context, userID uuid.UUID, accessJTI string, accessExpiresAt time.Time, refreshToken string) error {
-	if err := s.blacklist.Revoke(ctx, accessJTI, accessExpiresAt); err != nil {
+func (s *Service) Logout(ctx context.Context, claims AccessContext, refreshToken string) error {
+	if err := s.blacklist.Revoke(ctx, claims.JTI, claims.ExpiresAt); err != nil {
+		return err
+	}
+
+	if err := s.sessions.DeleteOwned(ctx, claims.SessionID, claims.UserID); err != nil {
 		return err
 	}
 
 	if refreshToken != "" {
 		hash := hashRefreshToken(refreshToken)
 		session, err := s.sessions.FindByRefreshTokenHash(ctx, hash)
-		if err == nil && session.UserID == userID {
+		if err == nil && session.UserID == claims.UserID {
 			_ = s.sessions.Delete(ctx, session.ID)
 		}
 	}
 
 	return nil
+}
+
+// LogoutAll revokes the current access token JTI and deletes every session for the user.
+func (s *Service) LogoutAll(ctx context.Context, claims AccessContext) error {
+	if err := s.blacklist.Revoke(ctx, claims.JTI, claims.ExpiresAt); err != nil {
+		return err
+	}
+	return s.sessions.DeleteByUserID(ctx, claims.UserID)
 }
 
 // GetUser returns a user by ID.
@@ -154,27 +166,36 @@ func (s *Service) GetUser(ctx context.Context, userID uuid.UUID) (UserView, erro
 }
 
 // ValidateAccessToken parses and checks whether an access token is valid.
-func (s *Service) ValidateAccessToken(ctx context.Context, tokenString string) (uuid.UUID, string, time.Time, error) {
+func (s *Service) ValidateAccessToken(ctx context.Context, tokenString string) (AccessContext, error) {
 	claims, err := s.jwt.ParseAccessToken(tokenString)
 	if err != nil {
-		return uuid.Nil, "", time.Time{}, ErrInvalidToken
+		return AccessContext{}, ErrInvalidToken
 	}
 
 	revoked, err := s.blacklist.IsRevoked(ctx, claims.ID)
 	if err != nil {
-		return uuid.Nil, "", time.Time{}, err
+		return AccessContext{}, err
 	}
 	if revoked {
-		return uuid.Nil, "", time.Time{}, ErrInvalidToken
+		return AccessContext{}, ErrInvalidToken
 	}
 
 	userID, err := uuid.Parse(claims.Subject)
 	if err != nil {
-		return uuid.Nil, "", time.Time{}, ErrInvalidToken
+		return AccessContext{}, ErrInvalidToken
 	}
 
-	expiresAt := claims.ExpiresAt.Time
-	return userID, claims.ID, expiresAt, nil
+	sessionID, err := uuid.Parse(claims.SessionID)
+	if err != nil {
+		return AccessContext{}, ErrInvalidToken
+	}
+
+	return AccessContext{
+		UserID:    userID,
+		SessionID: sessionID,
+		JTI:       claims.ID,
+		ExpiresAt: claims.ExpiresAt.Time,
+	}, nil
 }
 
 // JWKS returns the JSON Web Key Set.
@@ -183,19 +204,20 @@ func (s *Service) JWKS() map[string]interface{} {
 }
 
 func (s *Service) issueTokens(ctx context.Context, userID uuid.UUID) (TokenPair, error) {
-	accessToken, _, _, err := s.jwt.IssueAccessToken(userID)
-	if err != nil {
-		return TokenPair{}, err
-	}
-
 	refreshToken, err := newRefreshToken()
 	if err != nil {
 		return TokenPair{}, err
 	}
 
 	expiresAt := time.Now().UTC().Add(s.refreshTTL)
-	_, err = s.sessions.Create(ctx, userID, hashRefreshToken(refreshToken), expiresAt)
+	session, err := s.sessions.Create(ctx, userID, hashRefreshToken(refreshToken), expiresAt)
 	if err != nil {
+		return TokenPair{}, err
+	}
+
+	accessToken, _, _, err := s.jwt.IssueAccessToken(userID, session.ID)
+	if err != nil {
+		_ = s.sessions.Delete(ctx, session.ID)
 		return TokenPair{}, err
 	}
 

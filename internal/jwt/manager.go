@@ -3,6 +3,7 @@ package jwt
 import (
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
@@ -25,6 +26,7 @@ const (
 
 // AccessClaims are JWT claims for user access tokens.
 type AccessClaims struct {
+	SessionID string `json:"sid"`
 	jwt.RegisteredClaims
 }
 
@@ -51,7 +53,7 @@ func NewManager(privateKeyPEM, publicKeyPEM string) (*Manager, error) {
 		return &Manager{
 			privateKey: privateKey,
 			publicKey:  &privateKey.PublicKey,
-			keyID:      uuid.NewString(),
+			keyID:      jwkThumbprint(&privateKey.PublicKey),
 		}, nil
 	}
 
@@ -67,17 +69,18 @@ func NewManager(privateKeyPEM, publicKeyPEM string) (*Manager, error) {
 	return &Manager{
 		privateKey: privateKey,
 		publicKey:  publicKey,
-		keyID:      uuid.NewString(),
+		keyID:      jwkThumbprint(publicKey),
 	}, nil
 }
 
 // IssueAccessToken signs a new access token for the given user.
-func (m *Manager) IssueAccessToken(userID uuid.UUID) (string, string, time.Time, error) {
+func (m *Manager) IssueAccessToken(userID, sessionID uuid.UUID) (string, string, time.Time, error) {
 	jti := uuid.NewString()
 	now := time.Now().UTC()
 	expiresAt := now.Add(AccessTokenTTL)
 
 	claims := AccessClaims{
+		SessionID: sessionID.String(),
 		RegisteredClaims: jwt.RegisteredClaims{
 			Subject:   userID.String(),
 			ID:        jti,
@@ -187,6 +190,15 @@ func (m *Manager) JWKS() map[string]interface{} {
 // MarshalJWKS serializes JWKS as JSON bytes.
 func (m *Manager) MarshalJWKS() ([]byte, error) {
 	return json.Marshal(m.JWKS())
+}
+
+// jwkThumbprint returns the RFC 7638 JWK SHA-256 thumbprint of the RSA public key.
+func jwkThumbprint(publicKey *rsa.PublicKey) string {
+	n := base64.RawURLEncoding.EncodeToString(publicKey.N.Bytes())
+	e := base64.RawURLEncoding.EncodeToString(big.NewInt(int64(publicKey.E)).Bytes())
+	canonical := `{"e":"` + e + `","kty":"RSA","n":"` + n + `"}`
+	sum := sha256.Sum256([]byte(canonical))
+	return base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
 func hasAudience(audiences jwt.ClaimStrings, expected string) bool {
